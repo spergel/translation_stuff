@@ -34,9 +34,20 @@ async function extractPageImageFromPDF(fileData: Uint8Array, pageNumber: number)
     const tempDir = os.tmpdir()
     const tempPdfPath = path.join(tempDir, `temp_pdf_${Date.now()}_${Math.random().toString(36).substring(7)}.pdf`)
     
+    console.log(`📁 Creating temp PDF file: ${tempPdfPath}`)
+    console.log(`📊 PDF data size: ${fileData.length} bytes`)
+    
     try {
-      // Write PDF data to temp file
+      // Write PDF data to temp file with better error handling
       fs.writeFileSync(tempPdfPath, fileData)
+      
+      // Verify the file was created successfully
+      if (!fs.existsSync(tempPdfPath)) {
+        throw new Error(`Failed to create temp PDF file: ${tempPdfPath}`)
+      }
+      
+      const fileStats = fs.statSync(tempPdfPath)
+      console.log(`✅ Temp PDF created successfully: ${fileStats.size} bytes`)
       
       // Configure pdf2pic for serverless environment
       const convertOptions = {
@@ -49,6 +60,7 @@ async function extractPageImageFromPDF(fileData: Uint8Array, pageNumber: number)
       }
       
       // Convert specific page to image
+      console.log(`📤 Initializing pdf2pic converter...`)
       const convert = pdf2pic.fromPath(tempPdfPath, convertOptions)
       
       console.log(`📤 Converting page ${pageNumber} to PNG...`)
@@ -62,14 +74,18 @@ async function extractPageImageFromPDF(fileData: Uint8Array, pageNumber: number)
         console.log(`✅ Successfully extracted image for page ${pageNumber} (${dataUrl.length} chars)`)
         return dataUrl
       } else {
-        throw new Error('pdf2pic returned no buffer')
+        throw new Error(`pdf2pic returned no buffer for page ${pageNumber}`)
       }
       
+    } catch (fileError) {
+      console.error(`❌ File handling error for page ${pageNumber}:`, fileError)
+      throw fileError
     } finally {
       // Clean up temp file
       try {
         if (fs.existsSync(tempPdfPath)) {
           fs.unlinkSync(tempPdfPath)
+          console.log(`🗑️ Cleaned up temp file: ${tempPdfPath}`)
         }
       } catch (cleanupError) {
         console.warn('Could not clean up temp PDF file:', cleanupError)
