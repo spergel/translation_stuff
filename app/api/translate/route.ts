@@ -4,6 +4,10 @@ import { PDFDocument } from 'pdf-lib'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
+import { exec } from 'child_process'
+import { promisify } from 'util'
+
+const execAsync = promisify(exec)
 
 // Polyfill for Promise.withResolvers (needed for PDF.js compatibility in server environment)
 if (typeof Promise.withResolvers !== 'function') {
@@ -20,78 +24,86 @@ if (typeof Promise.withResolvers !== 'function') {
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!)
 
-// Vercel-compatible PDF-to-image conversion using PDF.js and virtual canvas
-const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js')
-const { JSDOM } = require('jsdom')
-
-// Set up virtual DOM for serverless environment
-const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>')
-const { window } = dom
-global.window = window as any
-global.document = window.document
-global.HTMLCanvasElement = window.HTMLCanvasElement
-global.ImageData = window.ImageData
-
-// Configure PDF.js for serverless use
-// Server-side MUST disable workers - can't access public HTTP paths
-console.log('📝 Disabling PDF.js workers for server-side processing')
-pdfjsLib.GlobalWorkerOptions.workerSrc = null
-
-// Vercel-compatible image extraction using PDF.js + virtual canvas
+// LINUX-NATIVE: Use actual Linux tools for PDF image extraction
 async function extractPageImageFromPDF(fileData: Uint8Array, pageNumber: number): Promise<string> {
   try {
-    console.log(`🖼️ Extracting image for page ${pageNumber} using PDF.js + virtual canvas (Vercel-compatible)...`)
+    console.log(`🖼️ Extracting image for page ${pageNumber} using Linux tools (poppler/ImageMagick)...`)
     
-    // Load PDF document
-    const loadingTask = pdfjsLib.getDocument({ 
-      data: fileData,
-      useWorkerFetch: false,
-      isEvalSupported: false,
-      useSystemFonts: true,
-      disableWorker: true  // Explicitly disable workers for server-side
-    })
+    // Create temporary files
+    const tempDir = os.tmpdir()
+    const tempPdfPath = path.join(tempDir, `temp_pdf_${Date.now()}_${Math.random().toString(36).substring(7)}.pdf`)
+    const tempImagePath = path.join(tempDir, `temp_image_${Date.now()}_${Math.random().toString(36).substring(7)}.png`)
     
-    const pdf = await loadingTask.promise
-    
-    if (pageNumber > pdf.numPages) {
-      console.warn(`⚠️ Page ${pageNumber} requested but PDF only has ${pdf.numPages} pages`)
-      return ''
+    try {
+      // Write PDF data to temp file
+      fs.writeFileSync(tempPdfPath, fileData)
+      
+      // Try multiple approaches - Linux servers usually have these tools
+      let imageBuffer: Buffer | null = null
+      
+      // Approach 1: Use pdftoppm (part of poppler-utils)
+      try {
+        console.log('Trying pdftoppm...')
+        await execAsync(`pdftoppm -f ${pageNumber} -l ${pageNumber} -png -r 150 "${tempPdfPath}" "${tempImagePath.replace('.png', '')}"`)
+        const outputFile = `${tempImagePath.replace('.png', '')}-${pageNumber.toString().padStart(2, '0')}.png`
+        if (fs.existsSync(outputFile)) {
+          imageBuffer = fs.readFileSync(outputFile)
+          fs.unlinkSync(outputFile)
+        }
+      } catch (error) {
+        console.log('pdftoppm failed, trying convert...')
+      }
+      
+      // Approach 2: Use ImageMagick convert
+      if (!imageBuffer) {
+        try {
+          console.log('Trying ImageMagick convert...')
+          await execAsync(`convert "${tempPdfPath}[${pageNumber - 1}]" -density 150 "${tempImagePath}"`)
+          if (fs.existsSync(tempImagePath)) {
+            imageBuffer = fs.readFileSync(tempImagePath)
+          }
+        } catch (error) {
+          console.log('ImageMagick failed, trying ghostscript...')
+        }
+      }
+      
+      // Approach 3: Use Ghostscript directly
+      if (!imageBuffer) {
+        try {
+          console.log('Trying Ghostscript...')
+          await execAsync(`gs -dNOPAUSE -dBATCH -sDEVICE=png16m -r150 -dFirstPage=${pageNumber} -dLastPage=${pageNumber} -sOutputFile="${tempImagePath}" "${tempPdfPath}"`)
+          if (fs.existsSync(tempImagePath)) {
+            imageBuffer = fs.readFileSync(tempImagePath)
+          }
+        } catch (error) {
+          console.log('All Linux tools failed')
+        }
+      }
+      
+      if (imageBuffer) {
+        // Convert to base64 data URL
+        const base64 = imageBuffer.toString('base64')
+        const dataUrl = `data:image/png;base64,${base64}`
+        
+        console.log(`✅ Extracted image for page ${pageNumber} using Linux tools (${dataUrl.length} chars)`)
+        return dataUrl
+      } else {
+        throw new Error('All extraction methods failed')
+      }
+      
+    } finally {
+      // Clean up temp files
+      try {
+        if (fs.existsSync(tempPdfPath)) fs.unlinkSync(tempPdfPath)
+        if (fs.existsSync(tempImagePath)) fs.unlinkSync(tempImagePath)
+      } catch (cleanupError) {
+        console.warn('Could not clean up temp files:', cleanupError)
+      }
     }
-    
-    // Get the specific page
-    const page = await pdf.getPage(pageNumber)
-    
-    // Set up viewport with good quality (2x scale like your Python script)
-    const viewport = page.getViewport({ scale: 2.0 })
-    
-    // Create virtual canvas using jsdom
-    const canvas = window.document.createElement('canvas')
-    canvas.width = viewport.width
-    canvas.height = viewport.height
-    const context = canvas.getContext('2d')
-    
-    if (!context) {
-      throw new Error('Failed to get canvas context')
-    }
-    
-    // Render PDF page to virtual canvas
-    const renderContext = {
-      canvasContext: context,
-      viewport: viewport
-    }
-    
-    await page.render(renderContext).promise
-    
-    // Convert canvas to base64 PNG
-    const dataUrl = canvas.toDataURL('image/png')
-    
-    console.log(`✅ Extracted image for page ${pageNumber} using virtual canvas (${dataUrl.length} chars)`)
-    return dataUrl
     
   } catch (error) {
     console.warn(`⚠️ Image extraction failed for page ${pageNumber}, continuing without image:`, error instanceof Error ? error.message : String(error))
     // Gracefully fallback: return empty string so translation can continue without image
-    // This ensures the translation always works even if image extraction fails
     return ''
   }
 }
@@ -313,14 +325,10 @@ Extract the original text from this page and provide a clear translation. Use ne
     progressCallback(90, `Page ${pageNum} translation complete`)
   }
 
-  // DISABLED: Image extraction causes persistent PDF.js worker issues
-  // Even with workerSrc = null and disableWorker = true, PDF.js still tries to load workers
-  // Text translation works perfectly, so prioritizing that for now
-  // const pageImage = await extractPageImageFromPDF(fileData, pageNum)
-  const pageImage = '' // Skip image extraction
+  const pageImage = await extractPageImageFromPDF(fileData, pageNum)
 
   if (progressCallback) {
-    progressCallback(100, `Page ${pageNum} complete with text only`)
+    progressCallback(100, `Page ${pageNum} complete with text and image`)
   }
 
   return {
@@ -336,7 +344,7 @@ Extract the original text from this page and provide a clear translation. Use ne
         position: 'left'
       }],
       columns: 1,
-      has_images: false,
+      has_images: true,
       special_elements: []
     },
     notes: undefined,
