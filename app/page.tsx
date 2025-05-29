@@ -2,49 +2,73 @@
 
 import React, { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Upload, FileText, Download, Eye, RotateCcw, ZoomIn, ZoomOut, Trash2, X } from 'lucide-react'
-import { extractPageImage, extractImagesFromPDF } from './utils/pdfUtils'
-import ClientImageExtractor from './components/ClientImageExtractor'
+import { Upload, Trash2 } from 'lucide-react'
+import { extractImagesFromPDF } from './utils/pdfUtils'
+import { TranslationResult, TranslationJob, TranslationMetadata } from './types/translation'
+import JobItem from './components/JobItem'
+import DownloadAllButton from './components/DownloadAllButton'
 
-interface TranslationResult {
-  translated_text: string
-  page_number: number
-  original_text?: string
-  page_image?: string
-  notes?: string
-  layout_structure?: {
-    page_type: string
-    sections: {
-      type: string
-      content: string
-      formatting: string
-      position: string
-    }[]
-    columns: number
-    has_images: boolean
-    special_elements: string[]
+// Test function for PDF.js debugging
+const testPDFJS = async () => {
+  try {
+    console.log('Testing PDF.js functionality...')
+    
+    // Check if PDF.js is available
+    const pdfjsLib = await import('pdfjs-dist')
+    console.log('PDF.js imported successfully:', pdfjsLib)
+    
+    // Check worker setup
+    console.log('Worker source:', pdfjsLib.GlobalWorkerOptions.workerSrc)
+    
+    // Test worker availability
+    try {
+      const testResponse = await fetch(pdfjsLib.GlobalWorkerOptions.workerSrc)
+      console.log('Worker file accessible:', testResponse.ok, testResponse.status)
+    } catch (workerError) {
+      console.error('Worker file not accessible:', workerError)
+    }
+    
+    // Test with a simple PDF creation
+    const canvas = document.createElement('canvas')
+    const context = canvas.getContext('2d')
+    if (context) {
+      canvas.width = 200
+      canvas.height = 100
+      context.fillStyle = 'white'
+      context.fillRect(0, 0, 200, 100)
+      context.fillStyle = 'red'
+      context.fillRect(10, 10, 50, 50)
+      context.fillStyle = 'black'
+      context.font = '16px Arial'
+      context.fillText('Test', 70, 40)
+      
+      const dataUrl = canvas.toDataURL('image/png')
+      console.log('Canvas test successful, data URL length:', dataUrl.length)
+      
+      // Display the test image
+      const img = document.createElement('img')
+      img.src = dataUrl
+      img.style.position = 'fixed'
+      img.style.top = '10px'
+      img.style.right = '10px'
+      img.style.zIndex = '9999'
+      img.style.border = '2px solid red'
+      document.body.appendChild(img)
+      
+      setTimeout(() => document.body.removeChild(img), 3000)
+      
+    } else {
+      console.error('Canvas context not available')
+    }
+    
+    // Test PDF.js configuration
+    console.log('PDF.js configuration test complete')
+    alert('PDF.js test completed! Check console for detailed results.')
+    
+  } catch (error) {
+    console.error('PDF.js test failed:', error)
+    alert(`PDF.js test failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
-}
-
-interface TranslationMetadata {
-  document_title?: string
-  total_pages?: number
-  target_language?: string
-}
-
-interface TranslationJob {
-  id: string
-  filename: string
-  status: 'uploading' | 'processing' | 'completed' | 'error' | 'extracting-images' | 'cancelled'
-  progress: number
-  results?: TranslationResult[]
-  error?: string
-  metadata?: TranslationMetadata
-  originalFile?: File // Store original file for image extraction
-  currentPage?: number
-  totalPages?: number
-  abortController?: AbortController // For cancelling ongoing requests
-  statusMessage?: string
 }
 
 export default function Home() {
@@ -74,14 +98,56 @@ export default function Home() {
 
     console.log(`📁 Processing ${acceptedFiles.length} files for ${userTier} tier (${currentActiveJobs} active jobs)`)
 
-    // Filter valid PDF files
+    // Filter valid PDF files and check sizes
     const validFiles = acceptedFiles.filter(file => {
       if (file.type !== 'application/pdf') {
         alert(`Skipping "${file.name}" - Please upload only PDF files`)
         return false
       }
+      
+      // Warn about large files
+      const fileSizeMB = Math.round(file.size / 1024 / 1024 * 100) / 100
+      if (fileSizeMB > 50) {
+        const proceed = confirm(`"${file.name}" is ${fileSizeMB}MB. Large PDFs may take longer to process and may timeout on free tier. Continue?`)
+        if (!proceed) return false
+      }
+      
       return true
     })
+
+    // Quick page count estimation for user awareness
+    for (const file of validFiles) {
+      try {
+        const arrayBuffer = await file.arrayBuffer()
+        const uint8Array = new Uint8Array(arrayBuffer)
+        const pdfjsLib = await import('pdfjs-dist')
+        const quickLoadingTask = pdfjsLib.getDocument({ data: uint8Array })
+        const quickPdf = await quickLoadingTask.promise
+        const pageCount = quickPdf.numPages
+        
+        if (pageCount > 50) {
+          const tierMessages = {
+            free: `"${file.name}" has ${pageCount} pages. Free tier is limited to 20 pages and may timeout. Consider upgrading or splitting the document.`,
+            basic: `"${file.name}" has ${pageCount} pages. This will be processed in batches of 20 pages for optimal performance.`,
+            pro: `"${file.name}" has ${pageCount} pages. This will be processed in batches of 40 pages for optimal performance.`,
+            enterprise: `"${file.name}" has ${pageCount} pages. This will be processed in batches of 100 pages for optimal performance.`
+          }
+          
+          const message = tierMessages[userTier as keyof typeof tierMessages] || tierMessages.free
+          
+          if (userTier === 'free' && pageCount > currentTierConfig.maxPages) {
+            alert(message + `\n\nOnly the first ${currentTierConfig.maxPages} pages will be processed.`)
+          } else {
+            const proceed = confirm(message + `\n\nProceed with processing?`)
+            if (!proceed) return
+          }
+        } else if (pageCount > 20) {
+          console.log(`📊 "${file.name}" has ${pageCount} pages - will skip client-side extraction for optimal performance`)
+        }
+      } catch (error) {
+        console.warn(`Could not determine page count for ${file.name}:`, error)
+      }
+    }
 
     // Create all jobs first so they show immediately
     const newJobs: TranslationJob[] = validFiles.map(file => {
@@ -268,6 +334,19 @@ export default function Home() {
                     } else if (data.type === 'result') {
                       // Individual result from batch processing
                       console.log(`📄 FRONTEND: Received individual result for page ${data.result?.page_number} of ${file.name}`)
+                      
+                      // DEBUG: Log image data details
+                      const result = data.result
+                      if (result) {
+                        console.log(`🖼️ Page ${result.page_number} image debug:`)
+                        console.log(`   - has page_image property: ${!!result.page_image}`)
+                        console.log(`   - page_image type: ${typeof result.page_image}`)
+                        console.log(`   - page_image length: ${result.page_image ? result.page_image.length : 'N/A'}`)
+                        console.log(`   - page_image starts with data: ${result.page_image ? result.page_image.startsWith('data:') : 'N/A'}`)
+                        console.log(`   - page_image first 50 chars: ${result.page_image ? result.page_image.substring(0, 50) : 'N/A'}`)
+                        console.log(`   - Result object keys:`, Object.keys(result))
+                      }
+                      
                       const existingResults = currentJob.results || []
                       const updatedResults = [...existingResults]
                       
@@ -507,329 +586,6 @@ export default function Home() {
     setJobs([])
   }
 
-  // Test function for PDF.js debugging
-  const testPDFJS = async () => {
-    try {
-      console.log('Testing PDF.js functionality...')
-      
-      // Check if PDF.js is available
-      const pdfjsLib = await import('pdfjs-dist')
-      console.log('PDF.js imported successfully:', pdfjsLib)
-      
-      // Check worker setup
-      console.log('Worker source:', pdfjsLib.GlobalWorkerOptions.workerSrc)
-      
-      // Test with a simple PDF creation
-      const canvas = document.createElement('canvas')
-      const context = canvas.getContext('2d')
-      if (context) {
-        canvas.width = 200
-        canvas.height = 100
-        context.fillStyle = 'red'
-        context.fillRect(0, 0, 200, 100)
-        const dataUrl = canvas.toDataURL('image/png')
-        console.log('Canvas test successful, data URL length:', dataUrl.length)
-      } else {
-        console.error('Canvas context not available')
-      }
-      
-    } catch (error) {
-      console.error('PDF.js test failed:', error)
-    }
-  }
-
-  const downloadHTML = (job: TranslationJob) => {
-    if (!job.results) return
-
-    const html = generateHTML(job.results, job.filename)
-    const blob = new Blob([html], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${job.filename.replace('.pdf', '')}_translated.html`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  // New download functions for different format combinations
-  const downloadOriginalNextToTranslation = (job: TranslationJob) => {
-    if (!job.results) return
-    const html = generateOriginalNextToTranslationHTML(job.results, job.filename)
-    const blob = new Blob([html], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${job.filename.replace('.pdf', '')}_original_and_translation.html`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const downloadOriginalNextToTranscription = (job: TranslationJob) => {
-    if (!job.results) return
-    const html = generateOriginalNextToTranscriptionHTML(job.results, job.filename)
-    const blob = new Blob([html], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${job.filename.replace('.pdf', '')}_original_and_transcription.html`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const downloadOriginalTranscriptionTranslation = (job: TranslationJob) => {
-    if (!job.results) return
-    const html = generateOriginalTranscriptionTranslationHTML(job.results, job.filename)
-    const blob = new Blob([html], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${job.filename.replace('.pdf', '')}_all_three.html`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const downloadTranscriptionNextToTranslation = (job: TranslationJob) => {
-    if (!job.results) return
-    const html = generateTranscriptionNextToTranslationHTML(job.results, job.filename)
-    const blob = new Blob([html], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${job.filename.replace('.pdf', '')}_transcription_and_translation.html`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const downloadTranslationOnly = (job: TranslationJob) => {
-    if (!job.results) return
-    const html = generateTranslationOnlyHTML(job.results, job.filename)
-    const blob = new Blob([html], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${job.filename.replace('.pdf', '')}_translation_only.html`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const downloadOriginalImageNextToTranslation = (job: TranslationJob) => {
-    if (!job.results) return
-    const html = generateOriginalImageNextToTranslationHTML(job.results, job.filename)
-    const blob = new Blob([html], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${job.filename.replace('.pdf', '')}_image_and_translation.html`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const downloadPDF = async (job: TranslationJob) => {
-    if (!job.results) return
-
-    try {
-      const response = await fetch('/api/generate-pdf', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          results: job.results,
-          filename: job.filename
-        })
-      })
-
-      if (!response.ok) throw new Error('PDF generation failed')
-
-      const blob = await response.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${job.filename.replace('.pdf', '')}_translated_structured.pdf`
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch (error) {
-      alert('Error generating PDF: ' + (error instanceof Error ? error.message : 'Unknown error'))
-    }
-  }
-
-  const downloadAllAsPDF = async (format?: 'transcription_translation' | 'original_translation' | 'translation_only' | 'complete_analysis') => {
-    // Get all completed jobs
-    const completedJobs = jobs.filter(job => 
-      job.status === 'completed' && job.results && job.results.length > 0
-    )
-
-    if (completedJobs.length === 0) {
-      alert('No completed translations found to download.')
-      return
-    }
-
-    if (completedJobs.length > 10) {
-      const confirmed = confirm(
-        `You are about to download ${completedJobs.length} PDF files in a ZIP. This may take a while. Continue?`
-      )
-      if (!confirmed) return
-    }
-
-    try {
-      console.log(`📦 Downloading ${completedJobs.length} translations as ${format || 'individual'} PDF ZIP...`)
-      
-      // Use different endpoint based on whether format is specified
-      const endpoint = format ? '/api/download-all-side-by-side-pdfs' : '/api/download-all-pdfs'
-      
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          jobs: completedJobs.map(job => ({
-            id: job.id,
-            filename: job.filename,
-            results: job.results,
-            metadata: job.metadata
-          })),
-          ...(format && { format })
-        })
-      })
-
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Failed to generate PDF ZIP file')
-      }
-
-      const blob = await response.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = format 
-        ? `translations_${format}_pdfs_${new Date().toISOString().split('T')[0]}.zip`
-        : `translations_${new Date().toISOString().split('T')[0]}.zip`
-      a.click()
-      URL.revokeObjectURL(url)
-
-      console.log(`✅ Downloaded PDF ZIP with ${completedJobs.length} files${format ? ` in ${format} format` : ''}`)
-      
-    } catch (error) {
-      console.error('Error downloading all PDFs:', error)
-      alert('Error generating PDF ZIP file: ' + (error instanceof Error ? error.message : 'Unknown error'))
-    }
-  }
-
-  const downloadAllAsHTML = async (format: 'original_translation' | 'transcription_translation' | 'translation_only' | 'complete_analysis') => {
-    // Get all completed jobs
-    const completedJobs = jobs.filter(job => 
-      job.status === 'completed' && job.results && job.results.length > 0
-    )
-
-    if (completedJobs.length === 0) {
-      alert('No completed translations found to download.')
-      return
-    }
-
-    if (completedJobs.length > 10) {
-      const confirmed = confirm(
-        `You are about to download ${completedJobs.length} HTML files in a ZIP. This may take a while. Continue?`
-      )
-      if (!confirmed) return
-    }
-
-    try {
-      console.log(`📦 Downloading ${completedJobs.length} translations as ${format} HTML ZIP...`)
-      
-      const response = await fetch('/api/download-all-html', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          jobs: completedJobs.map(job => ({
-            id: job.id,
-            filename: job.filename,
-            results: job.results,
-            metadata: job.metadata
-          })),
-          format: format
-        })
-      })
-
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Failed to generate HTML ZIP file')
-      }
-
-      const blob = await response.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `translations_${format}_${new Date().toISOString().split('T')[0]}.zip`
-      a.click()
-      URL.revokeObjectURL(url)
-
-      console.log(`✅ Downloaded HTML ZIP with ${completedJobs.length} files in ${format} format`)
-      
-    } catch (error) {
-      console.error('Error downloading all HTML files:', error)
-      alert('Error generating HTML ZIP file: ' + (error instanceof Error ? error.message : 'Unknown error'))
-    }
-  }
-
-  const viewSideBySide = (job: TranslationJob) => {
-    if (!job.results) {
-      console.error('No results available for side-by-side view')
-      alert('No translation results available')
-      return
-    }
-    
-    console.log('Opening side-by-side view for:', job.filename, 'with', job.results.length, 'pages')
-    
-    try {
-      // Open in new tab with side-by-side view
-      const newWindow = window.open('', '_blank')
-      if (newWindow) {
-        const html = generateSideBySideHTML(job.results, job.filename)
-        console.log('Generated HTML length:', html.length)
-        newWindow.document.write(html)
-        newWindow.document.close()
-        console.log('Side-by-side view opened successfully')
-      } else {
-        console.error('Failed to open new window - popup blocked?')
-        alert('Failed to open new window. Please check if popups are blocked.')
-      }
-    } catch (error) {
-      console.error('Error opening side-by-side view:', error)
-      alert('Error opening view: ' + (error instanceof Error ? error.message : 'Unknown error'))
-    }
-  }
-
-  const previewStructuredLayout = async (job: TranslationJob) => {
-    if (!job.results) return
-
-    try {
-      const response = await fetch('/api/generate-html', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          results: job.results,
-          filename: job.filename
-        })
-      })
-
-      if (!response.ok) throw new Error('HTML generation failed')
-
-      const html = await response.text()
-      const newWindow = window.open('', '_blank')
-      if (newWindow) {
-        newWindow.document.write(html)
-        newWindow.document.close()
-      }
-    } catch (error) {
-      alert('Error generating preview: ' + (error instanceof Error ? error.message : 'Unknown error'))
-    }
-  }
-
   return (
     <div className="min-h-screen bg-primary-50 py-8">
       <div className="max-w-6xl mx-auto px-4">
@@ -948,116 +704,7 @@ export default function Home() {
                 Translation Jobs ({jobs.length})
               </h2>
               <div className="flex space-x-2">
-                {/* Show Download All button only if there are completed jobs */}
-                {(() => {
-                  const completedJobs = jobs.filter(job => 
-                    job.status === 'completed' && job.results && job.results.length > 0
-                  )
-                  return completedJobs.length > 0 && (
-                    <div className="relative group">
-                      <button className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors">
-                        <Download className="h-4 w-4" />
-                        <span>Download All ({completedJobs.length})</span>
-                        <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                      
-                      {/* Dropdown Menu */}
-                      <div className="absolute right-0 mt-2 w-80 bg-white rounded-md shadow-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10">
-                        <div className="py-2">
-                          <div className="px-4 py-2 text-sm font-medium text-gray-700 border-b border-gray-100">
-                            Download All Translations ({completedJobs.length} files):
-                          </div>
-                          
-                          <div className="px-4 py-1 text-xs font-medium text-gray-600 bg-gray-50">
-                            PDF Formats:
-                          </div>
-                          
-                          <button
-                            onClick={() => downloadAllAsPDF('transcription_translation')}
-                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                          >
-                            <div className="font-medium">All as Transcription + Translation PDF (ZIP)</div>
-                            <div className="text-xs text-gray-500">Side-by-side PDF with transcription and translation</div>
-                          </button>
-                          
-                          <button
-                            onClick={() => downloadAllAsPDF('original_translation')}
-                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                          >
-                            <div className="font-medium">All as Original + Translation PDF (ZIP)</div>
-                            <div className="text-xs text-gray-500">Side-by-side PDF with original images and translation</div>
-                          </button>
-                          
-                          <button
-                            onClick={() => downloadAllAsPDF('translation_only')}
-                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                          >
-                            <div className="font-medium">All as Translation Only PDF (ZIP)</div>
-                            <div className="text-xs text-gray-500">Clean PDF with translations only</div>
-                          </button>
-                          
-                          <button
-                            onClick={() => downloadAllAsPDF('complete_analysis')}
-                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                          >
-                            <div className="font-medium">All as Complete Analysis PDF (ZIP)</div>
-                            <div className="text-xs text-gray-500">Original + Transcription + Translation (3 columns)</div>
-                          </button>
-                          
-                          <div className="border-t border-gray-100 mt-2 pt-2">
-                            <div className="px-4 py-1 text-xs font-medium text-gray-600 bg-gray-50">
-                              HTML Formats:
-                            </div>
-                            
-                            <button
-                              onClick={() => downloadAllAsHTML('transcription_translation')}
-                              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                            >
-                              <div className="font-medium">All as Transcription + Translation HTML (ZIP)</div>
-                              <div className="text-xs text-gray-500">Clean text transcription with translation side-by-side</div>
-                            </button>
-                            
-                            <button
-                              onClick={() => downloadAllAsHTML('original_translation')}
-                              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                            >
-                              <div className="font-medium">All as Side-by-Side HTML (ZIP)</div>
-                              <div className="text-xs text-gray-500">Original + Translation format for all files</div>
-                            </button>
-                            
-                            <button
-                              onClick={() => downloadAllAsHTML('translation_only')}
-                              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                            >
-                              <div className="font-medium">All as Translation Only HTML (ZIP)</div>
-                              <div className="text-xs text-gray-500">Clean, readable translations only</div>
-                            </button>
-                            
-                            <button
-                              onClick={() => downloadAllAsHTML('complete_analysis')}
-                              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                            >
-                              <div className="font-medium">All as Complete Analysis HTML (ZIP)</div>
-                              <div className="text-xs text-gray-500">Original + Transcription + Translation (3 columns)</div>
-                            </button>
-                          </div>
-                          
-                          <div className="border-t border-gray-100 mt-2 pt-2">
-                            <button
-                              onClick={() => downloadAllAsPDF()}
-                              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                            >
-                              <div className="font-medium">All as Individual PDFs (ZIP) - Legacy</div>
-                              <div className="text-xs text-gray-500">Original individual PDF format</div>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })()}
+                <DownloadAllButton jobs={jobs} />
                 <button
                   onClick={testPDFJS}
                   className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
@@ -1075,1137 +722,11 @@ export default function Home() {
             </div>
 
             {jobs.map((job) => (
-              <div key={job.id} className="bg-white rounded-lg shadow-lg p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center space-x-3">
-                    <FileText className="h-6 w-6 text-primary-300" />
-                    <span className="font-medium text-gray-900">{job.filename}</span>
-                    <span className={`px-2 py-1 text-xs rounded-full ${
-                      job.status === 'completed' ? 'bg-green-100 text-green-800' :
-                      job.status === 'error' ? 'bg-red-100 text-red-800' :
-                      job.status === 'cancelled' ? 'bg-orange-100 text-orange-800' :
-                      job.status === 'processing' ? 'bg-blue-100 text-blue-800' :
-                      job.status === 'extracting-images' ? 'bg-purple-100 text-purple-800' :
-                      'bg-gray-100 text-gray-800'
-                    }`}>
-                      {job.status === 'extracting-images' ? 'extracting images' : job.status}
-                    </span>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    {job.status === 'completed' && job.results && (
-                      <>
-                        <button
-                          onClick={() => viewSideBySide(job)}
-                          className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-                        >
-                          <Eye className="h-4 w-4" />
-                          <span>Side-by-Side</span>
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (!job.results) {
-                              alert('No translation results available')
-                              return
-                            }
-                            console.log('Opening quick view for:', job.filename, 'with', job.results.length, 'pages')
-                            try {
-                              const html = generateHTML(job.results, job.filename)
-                              console.log('Generated HTML length:', html.length)
-                              const newWindow = window.open('', '_blank')
-                              if (newWindow) {
-                                newWindow.document.write(html)
-                                newWindow.document.close()
-                                console.log('Quick view opened successfully')
-                              } else {
-                                alert('Failed to open new window. Please check if popups are blocked.')
-                              }
-                            } catch (error) {
-                              console.error('Error opening quick view:', error)
-                              alert('Error opening view: ' + (error instanceof Error ? error.message : 'Unknown error'))
-                            }
-                          }}
-                          className="flex items-center space-x-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
-                        >
-                          <Eye className="h-4 w-4" />
-                          <span>Quick View</span>
-                        </button>
-                        <button
-                          onClick={() => previewStructuredLayout(job)}
-                          className="flex items-center space-x-1 px-3 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
-                        >
-                          <Eye className="h-4 w-4" />
-                          <span>Preview Layout</span>
-                        </button>
-                        
-                        {/* Download Dropdown Menu */}
-                        <div className="relative group">
-                          <button className="flex items-center space-x-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors">
-                            <Download className="h-4 w-4" />
-                            <span>Download</span>
-                            <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                            </svg>
-                          </button>
-                          
-                          {/* Dropdown Menu */}
-                          <div className="absolute right-0 mt-2 w-80 bg-white rounded-md shadow-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10">
-                            <div className="py-2">
-                              <div className="px-4 py-2 text-sm font-medium text-gray-700 border-b border-gray-100">
-                                Choose Download Format:
-                              </div>
-                              
-                              <button
-                                onClick={() => downloadOriginalNextToTranslation(job)}
-                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                              >
-                                <div className="font-medium">Original + Translation</div>
-                                <div className="text-xs text-gray-500">Side-by-side comparison</div>
-                              </button>
-                              
-                              <button
-                                onClick={() => downloadOriginalImageNextToTranslation(job)}
-                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                              >
-                                <div className="font-medium">Original Image + Translation</div>
-                                <div className="text-xs text-gray-500">Clean image with translation only</div>
-                              </button>
-                              
-                              <button
-                                onClick={() => downloadOriginalNextToTranscription(job)}
-                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                              >
-                                <div className="font-medium">Original + Transcription</div>
-                                <div className="text-xs text-gray-500">Original text with clean transcription</div>
-                              </button>
-                              
-                              <button
-                                onClick={() => downloadOriginalTranscriptionTranslation(job)}
-                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                              >
-                                <div className="font-medium">Original + Transcription + Translation</div>
-                                <div className="text-xs text-gray-500">Complete three-column analysis</div>
-                              </button>
-                              
-                              <button
-                                onClick={() => downloadTranscriptionNextToTranslation(job)}
-                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                              >
-                                <div className="font-medium">Transcription + Translation</div>
-                                <div className="text-xs text-gray-500">Clean text with translation</div>
-                              </button>
-                              
-                              <button
-                                onClick={() => downloadTranslationOnly(job)}
-                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                              >
-                                <div className="font-medium">Translation Only</div>
-                                <div className="text-xs text-gray-500">Clean, readable translation</div>
-                              </button>
-                              
-                              <div className="border-t border-gray-100 mt-2 pt-2">
-                                <button
-                                  onClick={() => downloadHTML(job)}
-                                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                                >
-                                  <div className="font-medium">Legacy HTML Format</div>
-                                  <div className="text-xs text-gray-500">Original format (deprecated)</div>
-                                </button>
-                                
-                                <button
-                                  onClick={() => downloadPDF(job)}
-                                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                                >
-                                  <div className="font-medium">Structured PDF</div>
-                                  <div className="text-xs text-gray-500">PDF with layout preservation</div>
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </>
-                    )}
-                    <button
-                      onClick={() => deleteJob(job.id)}
-                      className={`flex items-center space-x-1 px-3 py-2 text-white rounded-md transition-colors ${
-                        job.status === 'processing' || job.status === 'uploading' || job.status === 'extracting-images'
-                          ? 'bg-orange-600 hover:bg-orange-700'
-                          : 'bg-red-600 hover:bg-red-700'
-                      }`}
-                      title={
-                        job.status === 'processing' || job.status === 'uploading' || job.status === 'extracting-images'
-                          ? 'Cancel translation and delete job'
-                          : 'Delete this job'
-                      }
-                    >
-                      <X className="h-4 w-4" />
-                      <span>
-                        {job.status === 'processing' || job.status === 'uploading' || job.status === 'extracting-images'
-                          ? 'Cancel'
-                          : 'Delete'
-                        }
-                      </span>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mb-4">
-                  <div className="flex justify-between text-sm text-gray-600 mb-1">
-                    <span className="capitalize">{job.status}</span>
-                    <span>
-                      {job.currentPage && job.totalPages ? 
-                        `Page ${job.currentPage} / ${job.totalPages}` : 
-                        `${job.progress}%`
-                      }
-                    </span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div 
-                      className={`h-2 rounded-full transition-all duration-300 ${
-                        job.status === 'error' ? 'bg-red-500' : 
-                        job.status === 'cancelled' ? 'bg-orange-500' : 
-                        'bg-primary-300'
-                      }`}
-                      style={{ width: `${job.progress}%` }}
-                    />
-                  </div>
-                  {job.statusMessage && (
-                    <div className="mt-2 text-sm text-gray-600">
-                      {job.statusMessage}
-                    </div>
-                  )}
-                </div>
-
-                {job.error && (
-                  <div className={`border rounded-md p-3 ${
-                    job.status === 'cancelled' 
-                      ? 'bg-orange-50 border-orange-200' 
-                      : 'bg-red-50 border-red-200'
-                  }`}>
-                    <p className={`text-sm ${
-                      job.status === 'cancelled' 
-                        ? 'text-orange-700' 
-                        : 'text-red-700'
-                    }`}>
-                      {job.status === 'cancelled' && job.error.includes('cancelled') 
-                        ? '🛑 Translation was cancelled by user. The process was stopped and cannot be resumed.'
-                        : job.error
-                      }
-                    </p>
-                  </div>
-                )}
-
-                {job.results && job.results.length > 0 && (
-                  <div className="mt-4">
-                    <h3 className="font-medium text-gray-900 mb-2">
-                      Translation Preview ({job.results.length} pages)
-                      {job.results.some(r => r.notes?.includes('error') || r.notes?.includes('failed') || r.translated_text?.includes('Could not process')) && (
-                        <span className="ml-2 px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded-full">
-                          Some pages had issues
-                        </span>
-                      )}
-                    </h3>
-                    <div className="bg-gray-50 rounded-md p-4 max-h-40 overflow-y-auto">
-                      <p className="text-sm text-gray-700">
-                        {job.results[0].translated_text.substring(0, 200)}...
-                      </p>
-                      {job.results.some(r => r.notes?.includes('error') || r.notes?.includes('failed') || r.translated_text?.includes('Could not process')) && (
-                        <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-700">
-                          <strong>Note:</strong> Some pages encountered transmission or processing errors. 
-                          These pages will show placeholder text or partial content in the final download.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
+              <JobItem key={job.id} job={job} onDelete={deleteJob} />
             ))}
           </div>
         )}
       </div>
     </div>
   )
-}
-
-function generateHTML(results: TranslationResult[], filename: string): string {
-  const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
-  
-  return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Translated: ${filename}</title>
-    <style>
-        body {
-            font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.6;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f8f5f0;
-            color: #333;
-        }
-        h1 {
-            text-align: center;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-        }
-        .page {
-            background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .page-number {
-            text-align: right;
-            color: #8D6E63;
-            font-size: 0.9em;
-            margin-bottom: 10px;
-        }
-        .translation {
-            white-space: pre-line;
-            font-size: 1.1em;
-        }
-        .notes {
-            font-style: italic;
-            color: #707070;
-            border-top: 1px dashed #ccc;
-            margin-top: 15px;
-            padding-top: 10px;
-        }
-        .character-name {
-            font-weight: bold;
-            color: #5D4037;
-        }
-        .stage-direction {
-            font-style: italic;
-            color: #6D4C41;
-        }
-    </style>
-</head>
-<body>
-    <h1>Translated: ${filename}</h1>
-    ${sortedResults.map(page => `
-    <div class="page">
-        <div class="page-number">Page ${page.page_number}</div>
-        <div class="translation">${formatTranslationText(page.translated_text)}</div>
-        ${page.notes ? `<div class="notes">${page.notes}</div>` : ''}
-    </div>
-    `).join('')}
-</body>
-</html>`
-}
-
-function generateSideBySideHTML(results: TranslationResult[], filename: string): string {
-  const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
-  
-  return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Side-by-Side: ${filename}</title>
-    <style>
-        body {
-            font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.6;
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f8f5f0;
-            color: #333;
-        }
-        h1 {
-            text-align: center;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-        }
-        .page {
-            background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .page-number {
-            text-align: center;
-            color: #8D6E63;
-            font-size: 1.2em;
-            margin-bottom: 15px;
-            font-weight: bold;
-        }
-        .comparison {
-            display: flex;
-            gap: 20px;
-            align-items: flex-start;
-        }
-        .original {
-            flex: 1;
-            border-right: 1px solid #ddd;
-            padding-right: 20px;
-        }
-        .translation-container {
-            flex: 1;
-            padding-left: 20px;
-        }
-        .original-content {
-            background-color: #f9f9f9;
-            border: 1px solid #e0e0e0;
-            border-radius: 5px;
-            padding: 15px;
-            margin-bottom: 15px;
-        }
-        .original-text {
-            white-space: pre-line;
-            font-size: 0.95em;
-            color: #444;
-            margin-bottom: 15px;
-        }
-        .page-image {
-            max-width: 100%;
-            height: auto;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .translation {
-            white-space: pre-line;
-            font-size: 1.1em;
-            background-color: #f0f8ff;
-            border: 1px solid #b0d4ff;
-            border-radius: 5px;
-            padding: 15px;
-        }
-        .notes {
-            font-style: italic;
-            color: #707070;
-            border-top: 1px dashed #ccc;
-            margin-top: 15px;
-            padding-top: 10px;
-        }
-        .character-name {
-            font-weight: bold;
-            color: #5D4037;
-        }
-        .stage-direction {
-            font-style: italic;
-            color: #6D4C41;
-        }
-        .placeholder {
-            background-color: #f5f5f5;
-            border: 2px dashed #ccc;
-            padding: 40px;
-            text-align: center;
-            color: #666;
-        }
-        .section-title {
-            font-weight: bold;
-            color: #5D4037;
-            margin-bottom: 10px;
-            font-size: 1.1em;
-        }
-    </style>
-</head>
-<body>
-    <h1>Side-by-Side Translation: ${filename}</h1>
-    ${sortedResults.map(page => `
-    <div class="page">
-        <div class="page-number">Page ${page.page_number}</div>
-        <div class="comparison">
-            <div class="original">
-                <div class="section-title">Original Content</div>
-                <div class="original-content">
-                    ${page.original_text ? `
-                        <div class="original-text">${formatTranslationText(page.original_text)}</div>
-                    ` : ''}
-                    ${page.page_image && page.page_image.length > 0 ? `
-                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/png;base64,${page.page_image}`}" 
-                             alt="Page ${page.page_number} Image" 
-                             class="page-image" />
-                    ` : `
-                        <div class="placeholder">
-                            Original Page ${page.page_number}
-                            <br><small>(No image available)</small>
-                        </div>
-                    `}
-                </div>
-            </div>
-            <div class="translation-container">
-                <div class="section-title">Translation</div>
-                <div class="translation">${formatTranslationText(page.translated_text)}</div>
-                ${page.notes ? `<div class="notes">${page.notes}</div>` : ''}
-            </div>
-        </div>
-    </div>
-    `).join('')}
-</body>
-</html>`
-}
-
-function formatTranslationText(text: string): string {
-  // Format dialogue and stage directions
-  let formatted = text
-    .replace(/([A-Za-z]+)(\s*\([^)]+\))?\n/g, '<span class="character-name">$1$2</span>\n')
-    .replace(/\(([^)]+)\)/g, '<span class="stage-direction">($1)</span>')
-  
-  return formatted
-}
-
-// New HTML generation functions for different format combinations
-
-function generateOriginalNextToTranslationHTML(results: TranslationResult[], filename: string): string {
-  const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
-  
-  return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Original & Translation: ${filename}</title>
-    <style>
-        body {
-            font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.6;
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f8f5f0;
-            color: #333;
-        }
-        h1 {
-            text-align: center;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-        }
-        .page {
-            background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .page-number {
-            text-align: center;
-            color: #8D6E63;
-            font-size: 1.1em;
-            font-weight: bold;
-            margin-bottom: 20px;
-            border-bottom: 1px solid #ddd;
-            padding-bottom: 10px;
-        }
-        .content-row {
-            display: flex;
-            gap: 30px;
-        }
-        .original-column, .translation-column {
-            flex: 1;
-        }
-        .column-header {
-            font-weight: bold;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 5px;
-            margin-bottom: 15px;
-        }
-        .original-image {
-            text-align: center;
-            background-color: #f9f9f9;
-            padding: 15px;
-            border-left: 4px solid #8D6E63;
-            border-radius: 4px;
-        }
-        .original-image img {
-            max-width: 100%;
-            height: auto;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .no-image-placeholder {
-            background-color: #f9f9f9;
-            padding: 40px 15px;
-            border-left: 4px solid #8D6E63;
-            text-align: center;
-            color: #666;
-            font-style: italic;
-            border-radius: 4px;
-        }
-        .translation-text {
-            background-color: #f0f8ff;
-            padding: 15px;
-            border-left: 4px solid #4CAF50;
-            white-space: pre-line;
-            border-radius: 4px;
-        }
-    </style>
-</head>
-<body>
-    <h1>Original Document & Translation: ${filename}</h1>
-    ${sortedResults.map(page => `
-    <div class="page">
-        <div class="page-number">Page ${page.page_number}</div>
-        <div class="content-row">
-            <div class="original-column">
-                <div class="column-header">Original Page Image</div>
-                ${page.page_image && page.page_image.length > 0 ? `
-                    <div class="original-image">
-                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/png;base64,${page.page_image}`}" 
-                             alt="Page ${page.page_number} Original" />
-                    </div>
-                ` : `
-                    <div class="no-image-placeholder">
-                        Original Page ${page.page_number}<br>
-                        <small>(Image not available)</small>
-                    </div>
-                `}
-            </div>
-            <div class="translation-column">
-                <div class="column-header">English Translation</div>
-                <div class="translation-text">${page.translated_text}</div>
-            </div>
-        </div>
-    </div>
-    `).join('')}
-</body>
-</html>`
-}
-
-function generateOriginalNextToTranscriptionHTML(results: TranslationResult[], filename: string): string {
-  const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
-  
-  return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Original & Transcription: ${filename}</title>
-    <style>
-        body {
-            font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.6;
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f8f5f0;
-            color: #333;
-        }
-        h1 {
-            text-align: center;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-        }
-        .page {
-            background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .page-number {
-            text-align: center;
-            color: #8D6E63;
-            font-size: 1.1em;
-            font-weight: bold;
-            margin-bottom: 20px;
-            border-bottom: 1px solid #ddd;
-            padding-bottom: 10px;
-        }
-        .content-row {
-            display: flex;
-            gap: 30px;
-        }
-        .original-column, .transcription-column {
-            flex: 1;
-        }
-        .column-header {
-            font-weight: bold;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 5px;
-            margin-bottom: 15px;
-        }
-        .original-image {
-            text-align: center;
-            background-color: #f9f9f9;
-            padding: 15px;
-            border-left: 4px solid #8D6E63;
-            border-radius: 4px;
-        }
-        .original-image img {
-            max-width: 100%;
-            height: auto;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .no-image-placeholder {
-            background-color: #f9f9f9;
-            padding: 40px 15px;
-            border-left: 4px solid #8D6E63;
-            text-align: center;
-            color: #666;
-            font-style: italic;
-            border-radius: 4px;
-        }
-        .transcription-text {
-            background-color: #fff8e1;
-            padding: 15px;
-            border-left: 4px solid #FF9800;
-            white-space: pre-line;
-            font-family: 'Courier New', monospace;
-            border-radius: 4px;
-        }
-    </style>
-</head>
-<body>
-    <h1>Original Document & Transcription: ${filename}</h1>
-    ${sortedResults.map(page => `
-    <div class="page">
-        <div class="page-number">Page ${page.page_number}</div>
-        <div class="content-row">
-            <div class="original-column">
-                <div class="column-header">Original Page Image</div>
-                ${page.page_image && page.page_image.length > 0 ? `
-                    <div class="original-image">
-                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/png;base64,${page.page_image}`}" 
-                             alt="Page ${page.page_number} Original" />
-                    </div>
-                ` : `
-                    <div class="no-image-placeholder">
-                        Original Page ${page.page_number}<br>
-                        <small>(Image not available)</small>
-                    </div>
-                `}
-            </div>
-            <div class="transcription-column">
-                <div class="column-header">Transcribed Text</div>
-                <div class="transcription-text">${page.original_text || 'Transcription not available'}</div>
-            </div>
-        </div>
-    </div>
-    `).join('')}
-</body>
-</html>`
-}
-
-function generateOriginalTranscriptionTranslationHTML(results: TranslationResult[], filename: string): string {
-  const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
-  
-  return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Original, Transcription & Translation: ${filename}</title>
-    <style>
-        body {
-            font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.6;
-            max-width: 1600px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f8f5f0;
-            color: #333;
-        }
-        h1 {
-            text-align: center;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-        }
-        .page {
-            background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .page-number {
-            text-align: center;
-            color: #8D6E63;
-            font-size: 1.1em;
-            font-weight: bold;
-            margin-bottom: 20px;
-            border-bottom: 1px solid #ddd;
-            padding-bottom: 10px;
-        }
-        .content-row {
-            display: flex;
-            gap: 20px;
-        }
-        .original-column, .transcription-column, .translation-column {
-            flex: 1;
-        }
-        .column-header {
-            font-weight: bold;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 5px;
-            margin-bottom: 15px;
-            font-size: 0.9em;
-        }
-        .original-image {
-            text-align: center;
-            background-color: #f9f9f9;
-            padding: 12px;
-            border-left: 4px solid #8D6E63;
-            border-radius: 4px;
-        }
-        .original-image img {
-            max-width: 100%;
-            height: auto;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .no-image-placeholder {
-            background-color: #f9f9f9;
-            padding: 40px 12px;
-            border-left: 4px solid #8D6E63;
-            text-align: center;
-            color: #666;
-            font-style: italic;
-            border-radius: 4px;
-        }
-        .transcription-text {
-            background-color: #fff8e1;
-            padding: 12px;
-            border-left: 4px solid #FF9800;
-            white-space: pre-line;
-            font-family: 'Courier New', monospace;
-            font-size: 0.9em;
-            border-radius: 4px;
-        }
-        .translation-text {
-            background-color: #f0f8ff;
-            padding: 12px;
-            border-left: 4px solid #4CAF50;
-            white-space: pre-line;
-            font-size: 0.9em;
-            border-radius: 4px;
-        }
-    </style>
-</head>
-<body>
-    <h1>Complete Document Analysis: ${filename}</h1>
-    ${sortedResults.map(page => `
-    <div class="page">
-        <div class="page-number">Page ${page.page_number}</div>
-        <div class="content-row">
-            <div class="original-column">
-                <div class="column-header">Original Page Image</div>
-                ${page.page_image && page.page_image.length > 0 ? `
-                    <div class="original-image">
-                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/png;base64,${page.page_image}`}" 
-                             alt="Page ${page.page_number} Original" />
-                    </div>
-                ` : `
-                    <div class="no-image-placeholder">
-                        Original Page ${page.page_number}<br>
-                        <small>(Image not available)</small>
-                    </div>
-                `}
-            </div>
-            <div class="transcription-column">
-                <div class="column-header">Transcribed Text</div>
-                <div class="transcription-text">${page.original_text || 'Transcription not available'}</div>
-            </div>
-            <div class="translation-column">
-                <div class="column-header">English Translation</div>
-                <div class="translation-text">${page.translated_text}</div>
-            </div>
-        </div>
-    </div>
-    `).join('')}
-</body>
-</html>`
-}
-
-function generateTranscriptionNextToTranslationHTML(results: TranslationResult[], filename: string): string {
-  const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
-  
-  return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Transcription & Translation: ${filename}</title>
-    <style>
-        body {
-            font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.6;
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f8f5f0;
-            color: #333;
-        }
-        h1 {
-            text-align: center;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-        }
-        .page {
-            background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .page-number {
-            text-align: center;
-            color: #8D6E63;
-            font-size: 1.1em;
-            font-weight: bold;
-            margin-bottom: 20px;
-            border-bottom: 1px solid #ddd;
-            padding-bottom: 10px;
-        }
-        .content-row {
-            display: flex;
-            gap: 30px;
-        }
-        .transcription-column, .translation-column {
-            flex: 1;
-        }
-        .column-header {
-            font-weight: bold;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 5px;
-            margin-bottom: 15px;
-        }
-        .transcription-text {
-            background-color: #fff8e1;
-            padding: 15px;
-            border-left: 4px solid #FF9800;
-            white-space: pre-line;
-            font-family: 'Courier New', monospace;
-            border-radius: 4px;
-        }
-        .translation-text {
-            background-color: #f0f8ff;
-            padding: 15px;
-            border-left: 4px solid #4CAF50;
-            white-space: pre-line;
-            border-radius: 4px;
-        }
-    </style>
-</head>
-<body>
-    <h1>Transcription & Translation: ${filename}</h1>
-    ${sortedResults.map(page => `
-    <div class="page">
-        <div class="page-number">Page ${page.page_number}</div>
-        <div class="content-row">
-            <div class="transcription-column">
-                <div class="column-header">Transcribed Text</div>
-                <div class="transcription-text">${page.original_text || 'Transcription not available'}</div>
-            </div>
-            <div class="translation-column">
-                <div class="column-header">English Translation</div>
-                <div class="translation-text">${page.translated_text}</div>
-            </div>
-        </div>
-    </div>
-    `).join('')}
-</body>
-</html>`
-}
-
-function generateTranslationOnlyHTML(results: TranslationResult[], filename: string): string {
-  const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
-  
-  return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Translation: ${filename}</title>
-    <style>
-        body {
-            font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.8;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 40px 20px;
-            background-color: #fefefe;
-            color: #2c3e50;
-        }
-        h1 {
-            text-align: center;
-            color: #2c3e50;
-            font-size: 2.2em;
-            margin-bottom: 40px;
-            border-bottom: 3px solid #3498db;
-            padding-bottom: 15px;
-        }
-        .page {
-            margin-bottom: 40px;
-            padding: 30px;
-            background-color: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            border-left: 5px solid #3498db;
-        }
-        .page-number {
-            color: #7f8c8d;
-            font-size: 0.9em;
-            font-weight: bold;
-            margin-bottom: 20px;
-            text-align: center;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        .translation {
-            font-size: 1.1em;
-            line-height: 1.8;
-            text-align: justify;
-            color: #2c3e50;
-        }
-        .translation p {
-            margin-bottom: 1.2em;
-        }
-    </style>
-</head>
-<body>
-    <h1>English Translation: ${filename}</h1>
-    ${sortedResults.map(page => `
-    <div class="page">
-        <div class="page-number">Page ${page.page_number}</div>
-        <div class="translation">${formatTranslationText(page.translated_text)}</div>
-    </div>
-    `).join('')}
-</body>
-</html>`
-}
-
-function generateOriginalImageNextToTranslationHTML(results: TranslationResult[], filename: string): string {
-  const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
-  
-  return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Original Image & Translation: ${filename}</title>
-    <style>
-        body {
-            font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.6;
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f8f5f0;
-            color: #333;
-        }
-        h1 {
-            text-align: center;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-        }
-        .page {
-            background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .page-number {
-            text-align: center;
-            color: #8D6E63;
-            font-size: 1.1em;
-            font-weight: bold;
-            margin-bottom: 20px;
-            border-bottom: 1px solid #ddd;
-            padding-bottom: 10px;
-        }
-        .content-row {
-            display: flex;
-            gap: 30px;
-        }
-        .original-column, .translation-column {
-            flex: 1;
-        }
-        .column-header {
-            font-weight: bold;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 5px;
-            margin-bottom: 15px;
-        }
-        .original-image {
-            text-align: center;
-            background-color: #f9f9f9;
-            padding: 15px;
-            border-left: 4px solid #8D6E63;
-            border-radius: 4px;
-        }
-        .original-image img {
-            max-width: 100%;
-            height: auto;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .no-image-placeholder {
-            background-color: #f9f9f9;
-            padding: 40px 15px;
-            border-left: 4px solid #8D6E63;
-            text-align: center;
-            color: #666;
-            font-style: italic;
-            border-radius: 4px;
-        }
-        .translation-text {
-            background-color: #f0f8ff;
-            padding: 15px;
-            border-left: 4px solid #4CAF50;
-            white-space: pre-line;
-            border-radius: 4px;
-        }
-    </style>
-</head>
-<body>
-    <h1>Original Image & Translation: ${filename}</h1>
-    ${sortedResults.map(page => `
-    <div class="page">
-        <div class="page-number">Page ${page.page_number}</div>
-        <div class="content-row">
-            <div class="original-column">
-                <div class="column-header">Original Page Image</div>
-                ${page.page_image && page.page_image.length > 0 ? `
-                    <div class="original-image">
-                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/png;base64,${page.page_image}`}" 
-                             alt="Page ${page.page_number} Original" />
-                    </div>
-                ` : `
-                    <div class="no-image-placeholder">
-                        Original Page ${page.page_number}<br>
-                        <small>(Image not available)</small>
-                    </div>
-                `}
-            </div>
-            <div class="translation-column">
-                <div class="column-header">English Translation</div>
-                <div class="translation-text">${page.translated_text}</div>
-            </div>
-        </div>
-    </div>
-    `).join('')}
-</body>
-</html>`
 } 

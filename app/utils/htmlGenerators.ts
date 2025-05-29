@@ -237,7 +237,7 @@ export function generateOriginalNextToTranslationHTML(results: TranslationResult
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Original Text & Translation: ${filename}</title>
+    <title>Original & Translation: ${filename}</title>
     <style>
         body {
             font-family: 'Bookerly', 'Georgia', serif;
@@ -286,50 +286,60 @@ export function generateOriginalNextToTranslationHTML(results: TranslationResult
             padding-bottom: 5px;
             margin-bottom: 15px;
         }
-        .original-text, .translation-text {
+        .original-image {
+            text-align: center;
             background-color: #f9f9f9;
             padding: 15px;
             border-left: 4px solid #8D6E63;
-            white-space: pre-line;
             border-radius: 4px;
-            min-height: 100px;
+        }
+        .original-image img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .no-image-placeholder {
+            background-color: #f9f9f9;
+            padding: 40px 15px;
+            border-left: 4px solid #8D6E63;
+            text-align: center;
+            color: #666;
+            font-style: italic;
+            border-radius: 4px;
         }
         .translation-text {
             background-color: #f0f8ff;
+            padding: 15px;
             border-left: 4px solid #4CAF50;
-        }
-        .no-text-message {
-            background-color: #fff8e1;
-            padding: 20px;
-            border-left: 4px solid #FFC107;
+            white-space: pre-line;
             border-radius: 4px;
-            color: #8D6E63;
-            font-style: italic;
-            text-align: center;
         }
     </style>
 </head>
 <body>
-    <h1>Original Text & Translation: ${filename}</h1>
+    <h1>Original Document & Translation: ${filename}</h1>
     ${sortedResults.map(page => `
     <div class="page">
         <div class="page-number">Page ${page.page_number}</div>
         <div class="content-row">
             <div class="original-column">
-                <div class="column-header">Original Text</div>
-                ${page.original_text && page.original_text.trim() && 
-                  !page.original_text.includes('This page contains only an image') &&
-                  !page.original_text.includes('Could not extract text') ? `
-                    <div class="original-text">${page.original_text}</div>
+                <div class="column-header">Original Page Image</div>
+                ${page.page_image && page.page_image.length > 0 ? `
+                    <div class="original-image">
+                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/png;base64,${page.page_image}`}" 
+                             alt="Page ${page.page_number} Original" />
+                    </div>
                 ` : `
-                    <div class="no-text-message">
-                        📄 This page appears to be image-only or the text could not be extracted.<br>
-                        <small>The page may contain graphics, charts, or handwritten content.</small>
+                    <div class="no-image-placeholder">
+                        Original Page ${page.page_number}<br>
+                        <small>(Image not available)</small>
                     </div>
                 `}
             </div>
             <div class="translation-column">
-                <div class="column-header">Translation</div>
+                <div class="column-header">English Translation</div>
                 <div class="translation-text">${page.translated_text}</div>
             </div>
         </div>
@@ -346,7 +356,7 @@ export function generateOriginalNextToTranscriptionHTML(results: TranslationResu
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Original Text & Transcription: ${filename}</title>
+    <title>Original & Transcription: ${filename}</title>
     <style>
         body {
             font-family: 'Bookerly', 'Georgia', serif;
@@ -395,50 +405,61 @@ export function generateOriginalNextToTranscriptionHTML(results: TranslationResu
             padding-bottom: 5px;
             margin-bottom: 15px;
         }
-        .original-text, .transcription-text {
+        .original-image {
+            text-align: center;
             background-color: #f9f9f9;
             padding: 15px;
             border-left: 4px solid #8D6E63;
-            white-space: pre-line;
             border-radius: 4px;
-            min-height: 100px;
+        }
+        .original-image img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .no-image-placeholder {
+            background-color: #f9f9f9;
+            padding: 40px 15px;
+            border-left: 4px solid #8D6E63;
+            text-align: center;
+            color: #666;
+            font-style: italic;
+            border-radius: 4px;
         }
         .transcription-text {
-            background-color: #f0f8ff;
-            border-left: 4px solid #2196F3;
-        }
-        .no-text-message {
             background-color: #fff8e1;
-            padding: 20px;
-            border-left: 4px solid #FFC107;
+            padding: 15px;
+            border-left: 4px solid #FF9800;
+            white-space: pre-line;
+            font-family: 'Courier New', monospace;
             border-radius: 4px;
-            color: #8D6E63;
-            font-style: italic;
-            text-align: center;
         }
     </style>
 </head>
 <body>
-    <h1>Original Text & Transcription: ${filename}</h1>
+    <h1>Original Document & Transcription: ${filename}</h1>
     ${sortedResults.map(page => `
     <div class="page">
         <div class="page-number">Page ${page.page_number}</div>
         <div class="content-row">
             <div class="original-column">
-                <div class="column-header">Original Text</div>
-                ${page.original_text && page.original_text.trim() && 
-                  !page.original_text.includes('This page contains only an image') &&
-                  !page.original_text.includes('Could not extract text') ? `
-                    <div class="original-text">${page.original_text}</div>
+                <div class="column-header">Original Page Image</div>
+                ${page.page_image && page.page_image.length > 0 ? `
+                    <div class="original-image">
+                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/png;base64,${page.page_image}`}" 
+                             alt="Page ${page.page_number} Original" />
+                    </div>
                 ` : `
-                    <div class="no-text-message">
-                        📄 This page appears to be image-only or the text could not be extracted.<br>
-                        <small>The page may contain graphics, charts, or handwritten content.</small>
+                    <div class="no-image-placeholder">
+                        Original Page ${page.page_number}<br>
+                        <small>(Image not available)</small>
                     </div>
                 `}
             </div>
             <div class="transcription-column">
-                <div class="column-header">Transcription</div>
+                <div class="column-header">Transcribed Text</div>
                 <div class="transcription-text">${page.original_text || 'Transcription not available'}</div>
             </div>
         </div>

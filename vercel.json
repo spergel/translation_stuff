@@ -1,23 +1,23 @@
 {
   "functions": {
     "app/api/translate/route.ts": {
-      "maxDuration": 300,
+      "maxDuration": 60,
       "memory": 1024
     },
     "app/api/generate-pdf/route.ts": {
-      "maxDuration": 120,
+      "maxDuration": 60,
       "memory": 512
     },
     "app/api/download-all-pdfs/route.ts": {
-      "maxDuration": 300,
+      "maxDuration": 60,
       "memory": 1024
     },
     "app/api/download-all-html/route.ts": {
-      "maxDuration": 120,
+      "maxDuration": 60,
       "memory": 512
     },
     "app/api/download-all-side-by-side-pdfs/route.ts": {
-      "maxDuration": 300,
+      "maxDuration": 60,
       "memory": 1024
     }
   },
@@ -25,6 +25,5 @@
     "env": {
       "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD": "true"
     }
-  },
-  "buildCommand": "yum install -y cairo-devel pango-devel libjpeg-turbo-devel giflib-devel librsvg2-devel && npm run build"
+  }
 } 
