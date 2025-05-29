@@ -6,6 +6,7 @@ import * as path from 'path'
 import * as os from 'os'
 import { exec } from 'child_process'
 import { promisify } from 'util'
+import pdf2pic from 'pdf2pic'
 
 const execAsync = promisify(exec)
 
@@ -24,80 +25,54 @@ if (typeof Promise.withResolvers !== 'function') {
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!)
 
-// LINUX-NATIVE: Use actual Linux tools for PDF image extraction
+// SERVERLESS-COMPATIBLE: Use pdf2pic library for image extraction
 async function extractPageImageFromPDF(fileData: Uint8Array, pageNumber: number): Promise<string> {
   try {
-    console.log(`🖼️ Extracting image for page ${pageNumber} using Linux tools (poppler/ImageMagick)...`)
+    console.log(`🖼️ Extracting image for page ${pageNumber} using pdf2pic (serverless-compatible)...`)
     
-    // Create temporary files
+    // Create temporary file for PDF data
     const tempDir = os.tmpdir()
     const tempPdfPath = path.join(tempDir, `temp_pdf_${Date.now()}_${Math.random().toString(36).substring(7)}.pdf`)
-    const tempImagePath = path.join(tempDir, `temp_image_${Date.now()}_${Math.random().toString(36).substring(7)}.png`)
     
     try {
       // Write PDF data to temp file
       fs.writeFileSync(tempPdfPath, fileData)
       
-      // Try multiple approaches - Linux servers usually have these tools
-      let imageBuffer: Buffer | null = null
-      
-      // Approach 1: Use pdftoppm (part of poppler-utils)
-      try {
-        console.log('Trying pdftoppm...')
-        await execAsync(`pdftoppm -f ${pageNumber} -l ${pageNumber} -png -r 150 "${tempPdfPath}" "${tempImagePath.replace('.png', '')}"`)
-        const outputFile = `${tempImagePath.replace('.png', '')}-${pageNumber.toString().padStart(2, '0')}.png`
-        if (fs.existsSync(outputFile)) {
-          imageBuffer = fs.readFileSync(outputFile)
-          fs.unlinkSync(outputFile)
-        }
-      } catch (error) {
-        console.log('pdftoppm failed, trying convert...')
+      // Configure pdf2pic for serverless environment
+      const convertOptions = {
+        density: 150,           // 150 DPI for good quality
+        saveFilename: "page",   // Output filename prefix
+        savePath: tempDir,      // Save to temp directory
+        format: "png",          // PNG format
+        width: 1200,            // Max width
+        height: 1600,           // Max height
       }
       
-      // Approach 2: Use ImageMagick convert
-      if (!imageBuffer) {
-        try {
-          console.log('Trying ImageMagick convert...')
-          await execAsync(`convert "${tempPdfPath}[${pageNumber - 1}]" -density 150 "${tempImagePath}"`)
-          if (fs.existsSync(tempImagePath)) {
-            imageBuffer = fs.readFileSync(tempImagePath)
-          }
-        } catch (error) {
-          console.log('ImageMagick failed, trying ghostscript...')
-        }
-      }
+      // Convert specific page to image
+      const convert = pdf2pic.fromPath(tempPdfPath, convertOptions)
       
-      // Approach 3: Use Ghostscript directly
-      if (!imageBuffer) {
-        try {
-          console.log('Trying Ghostscript...')
-          await execAsync(`gs -dNOPAUSE -dBATCH -sDEVICE=png16m -r150 -dFirstPage=${pageNumber} -dLastPage=${pageNumber} -sOutputFile="${tempImagePath}" "${tempPdfPath}"`)
-          if (fs.existsSync(tempImagePath)) {
-            imageBuffer = fs.readFileSync(tempImagePath)
-          }
-        } catch (error) {
-          console.log('All Linux tools failed')
-        }
-      }
+      console.log(`📤 Converting page ${pageNumber} to PNG...`)
+      const result = await convert(pageNumber, { responseType: "buffer" })
       
-      if (imageBuffer) {
-        // Convert to base64 data URL
-        const base64 = imageBuffer.toString('base64')
+      if (result && result.buffer) {
+        // Convert buffer to base64 data URL
+        const base64 = result.buffer.toString('base64')
         const dataUrl = `data:image/png;base64,${base64}`
         
-        console.log(`✅ Extracted image for page ${pageNumber} using Linux tools (${dataUrl.length} chars)`)
+        console.log(`✅ Successfully extracted image for page ${pageNumber} (${dataUrl.length} chars)`)
         return dataUrl
       } else {
-        throw new Error('All extraction methods failed')
+        throw new Error('pdf2pic returned no buffer')
       }
       
     } finally {
-      // Clean up temp files
+      // Clean up temp file
       try {
-        if (fs.existsSync(tempPdfPath)) fs.unlinkSync(tempPdfPath)
-        if (fs.existsSync(tempImagePath)) fs.unlinkSync(tempImagePath)
+        if (fs.existsSync(tempPdfPath)) {
+          fs.unlinkSync(tempPdfPath)
+        }
       } catch (cleanupError) {
-        console.warn('Could not clean up temp files:', cleanupError)
+        console.warn('Could not clean up temp PDF file:', cleanupError)
       }
     }
     

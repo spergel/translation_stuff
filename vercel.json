@@ -20,5 +20,6 @@
     "env": {
       "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD": "true"
     }
-  }
+  },
+  "buildCommand": "yum install -y poppler-utils ImageMagick ghostscript && npm run build"
 } 
