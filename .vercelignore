@@ -1,0 +1,20 @@
+# Python files
+*.py
+__pycache__/
+requirements.txt
+
+# Large PDF files
+*.pdf
+trans.pdf
+translated_book.pdf
+
+# Generated files
+translation.html
+translation_results.json
+translation_side_by_side.html
+
+# Templates directory (if not needed)
+templates/
+
+# Development files
+.env.local 
