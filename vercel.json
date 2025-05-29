@@ -1,19 +1,24 @@
 {
   "functions": {
     "app/api/translate/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 300,
+      "memory": 1024
     },
     "app/api/generate-pdf/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 120,
+      "memory": 512
     },
     "app/api/download-all-pdfs/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 300,
+      "memory": 1024
     },
     "app/api/download-all-html/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 120,
+      "memory": 512
     },
     "app/api/download-all-side-by-side-pdfs/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 300,
+      "memory": 1024
     }
   },
   "build": {
@@ -21,5 +26,5 @@
       "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD": "true"
     }
   },
-  "buildCommand": "yum install -y poppler-utils ImageMagick ghostscript && npm run build"
+  "buildCommand": "yum install -y cairo-devel pango-devel libjpeg-turbo-devel giflib-devel librsvg2-devel && npm run build"
 } 

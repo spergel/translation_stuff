@@ -1,8 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Vercel serverless function optimizations
   experimental: {
-    serverComponentsExternalPackages: ['sharp', 'pdf-lib', 'canvas']
+    serverComponentsExternalPackages: ['sharp', 'pdf-lib', 'canvas', 'pdfjs-serverless']
   },
+  
+  // Increase memory limit for serverless functions processing large PDFs
+  serverRuntimeConfig: {
+    maxDuration: 300, // 5 minutes max for PDF processing
+  },
+  
   webpack: (config, { isServer }) => {
     // Handle PDF.js worker and canvas dependencies
     if (!isServer) {
@@ -26,6 +33,13 @@ const nextConfig = {
       // Handle canvas
       if (!config.externals.includes('canvas')) {
         config.externals.push('canvas')
+      }
+      
+      // Optimize for serverless function size and performance
+      config.optimization = {
+        ...config.optimization,
+        // Don't split chunks for serverless functions
+        splitChunks: false,
       }
     }
     

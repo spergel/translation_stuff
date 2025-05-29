@@ -4,13 +4,13 @@ A modern Next.js application for translating PDF documents using Google's Gemini
 
 ## 🚀 Features
 
-- **Multi-file Upload**: Drag & drop multiple PDF files for simultaneous processing
-- **Real-time Progress**: Live progress tracking with detailed status updates
-- **Multiple Output Formats**: 8+ different HTML export formats including side-by-side, transcription, and complete analysis
-- **Tier-based Processing**: Support for different subscription tiers with varying capabilities
-- **Batch Processing**: Concurrent page processing for faster translation (paid tiers)
-- **Image Extraction**: Extract page images from PDFs
-- **Responsive UI**: Modern, clean interface with Tailwind CSS
+- **AI-Powered Translation**: Uses Google's Gemini 1.5 Flash for accurate document translation
+- **PDF Processing**: Handles multi-page PDFs with intelligent page splitting
+- **Visual Context**: Extracts page images for better translation accuracy using **Vercel Blob** for serverless file handling
+- **Multiple Output Formats**: Generate translated PDFs, HTML, and side-by-side comparisons
+- **Batch Processing**: Efficient processing with tier-based batch sizes (Free: 1 page, Basic: 20 pages, Pro: 40 pages, Enterprise: 100 pages)
+- **Real-time Progress**: Live progress updates during translation
+- **Serverless Architecture**: Fully optimized for Vercel deployment with no filesystem dependencies
 
 ## 📁 Project Structure
 
@@ -182,4 +182,12 @@ Translates a PDF file using Gemini AI.
 
 ## 📄 License
 
-[Add your license information here] 
+[Add your license information here]
+
+## 🛠️ Technologies
+
+- **Frontend**: Next.js 14, React 18, TypeScript, Tailwind CSS
+- **AI/ML**: Google Gemini 1.5 Flash API with structured JSON output
+- **PDF Processing**: pdf-lib, pdf2pic with Vercel Blob storage
+- **File Storage**: Vercel Blob for temporary file handling in serverless environment
+- **Deployment**: Vercel with custom build optimizations 

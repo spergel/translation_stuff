@@ -3,7 +3,8 @@
 import React, { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, FileText, Download, Eye, RotateCcw, ZoomIn, ZoomOut, Trash2, X } from 'lucide-react'
-import { extractPageImage } from './utils/pdfUtils'
+import { extractPageImage, extractImagesFromPDF } from './utils/pdfUtils'
+import ClientImageExtractor from './components/ClientImageExtractor'
 
 interface TranslationResult {
   translated_text: string
@@ -90,10 +91,11 @@ export default function Home() {
       return {
         id: jobId,
         filename: file.name,
-        status: 'uploading',
+        status: 'extracting-images', // Start with image extraction
         progress: 0,
         originalFile: file,
-        abortController
+        abortController,
+        statusMessage: 'Extracting PDF images...'
       }
     })
 
@@ -105,13 +107,45 @@ export default function Home() {
       const job = newJobs[i]
       const file = validFiles[i]
 
-      console.log(`📄 Starting translation for: ${file.name} (${Math.round(file.size / 1024 / 1024 * 100) / 100} MB)`)
+      console.log(`📄 Starting processing for: ${file.name} (${Math.round(file.size / 1024 / 1024 * 100) / 100} MB)`)
 
       try {
+        // Step 1: Extract images using client-side PDF.js
+        console.log(`🖼️ Extracting images for ${file.name}...`)
+        setJobs(prev => prev.map(j => j.id === job.id ? { 
+          ...j, 
+          status: 'extracting-images', 
+          progress: 10,
+          statusMessage: 'Extracting PDF images using client-side PDF.js...'
+        } : j))
+
+        const extractedImages = await extractImagesFromPDF(file)
+        
+        console.log(`✅ Extracted ${extractedImages.length} images for ${file.name}`)
+        setJobs(prev => prev.map(j => j.id === job.id ? { 
+          ...j, 
+          progress: 30,
+          statusMessage: `Extracted ${extractedImages.length} images, starting translation...`
+        } : j))
+
+        // Step 2: Send to API with pre-extracted images
+        setJobs(prev => prev.map(j => j.id === job.id ? { 
+          ...j, 
+          status: 'uploading',
+          progress: 35,
+          statusMessage: 'Uploading file and images to server...'
+        } : j))
+
         const formData = new FormData()
         formData.append('file', file)
         formData.append('targetLanguage', selectedLanguage)
         formData.append('userTier', userTier)
+        
+        // Add pre-extracted images
+        if (extractedImages.length > 0) {
+          formData.append('preExtractedImages', JSON.stringify(extractedImages))
+          console.log(`📸 Sending ${extractedImages.length} pre-extracted images to server`)
+        }
 
         const response = await fetch('/api/translate', {
           method: 'POST',
@@ -1234,6 +1268,11 @@ export default function Home() {
                       style={{ width: `${job.progress}%` }}
                     />
                   </div>
+                  {job.statusMessage && (
+                    <div className="mt-2 text-sm text-gray-600">
+                      {job.statusMessage}
+                    </div>
+                  )}
                 </div>
 
                 {job.error && (

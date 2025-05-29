@@ -86,4 +86,77 @@ export async function getPDFPageCount(file: File): Promise<number> {
     console.error('Error getting PDF page count:', error)
     return 1
   }
+}
+
+interface ExtractedPage {
+  pageNumber: number
+  imageDataUrl: string
+}
+
+export async function extractImagesFromPDF(file: File): Promise<ExtractedPage[]> {
+  try {
+    console.log('📄 Client-side image extraction starting for:', file.name)
+    
+    // Read the PDF file
+    const arrayBuffer = await file.arrayBuffer()
+    const uint8Array = new Uint8Array(arrayBuffer)
+    
+    // Load PDF document with robust configuration
+    const loadingTask = pdfjsLib.getDocument({ 
+      data: uint8Array,
+      useWorkerFetch: false,
+      isEvalSupported: false,
+      useSystemFonts: true
+    })
+    const pdf = await loadingTask.promise
+    
+    console.log(`📄 PDF loaded: ${pdf.numPages} pages`)
+    
+    const extractedImages: ExtractedPage[] = []
+    
+    // Extract each page as image
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      console.log(`🖼️ Extracting page ${pageNum}/${pdf.numPages}...`)
+      
+      try {
+        const page = await pdf.getPage(pageNum)
+        const viewport = page.getViewport({ scale: 2.0 })
+        
+        // Create canvas
+        const canvas = document.createElement('canvas')
+        const context = canvas.getContext('2d')!
+        canvas.height = viewport.height
+        canvas.width = viewport.width
+        
+        // Render page to canvas
+        const renderContext = {
+          canvasContext: context,
+          viewport: viewport,
+        }
+        
+        await page.render(renderContext).promise
+        
+        // Convert to data URL
+        const imageDataUrl = canvas.toDataURL('image/png')
+        
+        extractedImages.push({
+          pageNumber: pageNum,
+          imageDataUrl
+        })
+        
+        console.log(`✅ Page ${pageNum} extracted (${imageDataUrl.length} chars)`)
+        
+      } catch (pageError) {
+        console.error(`⚠️ Error extracting page ${pageNum}:`, pageError)
+        // Continue with other pages
+      }
+    }
+    
+    console.log(`🎉 Client-side extraction complete: ${extractedImages.length} images`)
+    return extractedImages
+    
+  } catch (error) {
+    console.error('❌ Client-side extraction failed:', error)
+    return []
+  }
 } 
