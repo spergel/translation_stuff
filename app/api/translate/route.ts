@@ -310,13 +310,17 @@ Extract the original text from this page and provide a clear translation. Use ne
   }
   
   if (progressCallback) {
-    progressCallback(90, `Page ${pageNum} translation complete, extracting image...`)
+    progressCallback(90, `Page ${pageNum} translation complete`)
   }
 
-  const pageImage = await extractPageImageFromPDF(fileData, pageNum)
+  // DISABLED: Image extraction causes persistent PDF.js worker issues
+  // Even with workerSrc = null and disableWorker = true, PDF.js still tries to load workers
+  // Text translation works perfectly, so prioritizing that for now
+  // const pageImage = await extractPageImageFromPDF(fileData, pageNum)
+  const pageImage = '' // Skip image extraction
 
   if (progressCallback) {
-    progressCallback(100, `Page ${pageNum} complete with ${pageImage ? 'image' : 'text only'}`)
+    progressCallback(100, `Page ${pageNum} complete with text only`)
   }
 
   return {
