@@ -30,10 +30,25 @@ async function extractPageImageFromPDF(fileData: Uint8Array, pageNumber: number)
   try {
     console.log(`🖼️ Extracting image for page ${pageNumber} using pdf2pic (serverless-compatible)...`)
     
-    // Create temporary file for PDF data
-    const tempDir = os.tmpdir()
+    // Use Vercel-compatible temp directory
+    // In serverless environments, use /tmp explicitly or create our own temp space
+    let tempDir: string
+    try {
+      tempDir = process.env.VERCEL ? '/tmp' : os.tmpdir()
+      
+      // Ensure the temp directory exists
+      if (!fs.existsSync(tempDir)) {
+        console.log(`📁 Creating temp directory: ${tempDir}`)
+        fs.mkdirSync(tempDir, { recursive: true })
+      }
+    } catch (dirError) {
+      console.warn(`⚠️ Could not access temp directory, falling back to current directory`)
+      tempDir = process.cwd()
+    }
+    
     const tempPdfPath = path.join(tempDir, `temp_pdf_${Date.now()}_${Math.random().toString(36).substring(7)}.pdf`)
     
+    console.log(`📁 Using temp directory: ${tempDir}`)
     console.log(`📁 Creating temp PDF file: ${tempPdfPath}`)
     console.log(`📊 PDF data size: ${fileData.length} bytes`)
     
@@ -79,6 +94,32 @@ async function extractPageImageFromPDF(fileData: Uint8Array, pageNumber: number)
       
     } catch (fileError) {
       console.error(`❌ File handling error for page ${pageNumber}:`, fileError)
+      
+      // FALLBACK: Try using pdf2pic with Buffer instead of file
+      try {
+        console.log(`🔄 Attempting fallback method with Buffer for page ${pageNumber}...`)
+        
+        // Try pdf2pic from Buffer (some versions support this)
+        const convert = pdf2pic.fromBuffer(Buffer.from(fileData), {
+          density: 150,
+          format: "png",
+          width: 1200,
+          height: 1600,
+        })
+        
+        const result = await convert(pageNumber, { responseType: "buffer" })
+        
+        if (result && result.buffer) {
+          const base64 = result.buffer.toString('base64')
+          const dataUrl = `data:image/png;base64,${base64}`
+          
+          console.log(`✅ Fallback successful for page ${pageNumber} (${dataUrl.length} chars)`)
+          return dataUrl
+        }
+      } catch (fallbackError) {
+        console.warn(`⚠️ Fallback method also failed for page ${pageNumber}:`, fallbackError instanceof Error ? fallbackError.message : String(fallbackError))
+      }
+      
       throw fileError
     } finally {
       // Clean up temp file
