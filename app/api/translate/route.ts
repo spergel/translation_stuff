@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { TranslationResult } from '../../types/translation'
 import { initializeServerlessEnvironment } from '../../utils/serverlessPolyfills'
-import { getPDFPageCount, processIndividualPagesSplit } from '../../utils/translationProcessor'
+import { getPDFPageCount, processDocumentSmart } from '../../utils/translationProcessor'
 
 // Initialize serverless environment
 initializeServerlessEnvironment()
@@ -39,40 +39,10 @@ export async function POST(request: NextRequest) {
           const file = formData.get('file') as File
           const targetLanguage = formData.get('targetLanguage') as string
           const userTier = formData.get('userTier') as string || 'free'
+          const extractImages = formData.get('extractImages') !== 'false'
           
-          // NEW: Accept pre-extracted images from client
-          const preExtractedImages = formData.get('preExtractedImages') as string || '[]'
-          let clientImages: Record<number, string> = {}
+          console.log(`🚀 Starting translation processing with ${extractImages ? 'images' : 'text-only'}`)
           
-          try {
-            const parsedImages = JSON.parse(preExtractedImages)
-            if (Array.isArray(parsedImages)) {
-              clientImages = parsedImages.reduce((acc: Record<number, string>, img: any) => {
-                if (img.pageNumber && img.imageDataUrl) {
-                  acc[img.pageNumber] = img.imageDataUrl
-                }
-                return acc
-              }, {})
-              
-              // 🚨 DETAILED LOGGING: Client images received
-              console.log(`\n📸 CLIENT IMAGES RECEIVED:`)
-              console.log(`📊 Total images from client: ${Object.keys(clientImages).length}`)
-              
-              Object.entries(clientImages).forEach(([pageNum, imageDataUrl]) => {
-                const sizeKB = Math.round(imageDataUrl.length * 0.75 / 1024)
-                console.log(`  📄 Page ${pageNum}: ${sizeKB}KB (${imageDataUrl.length} chars)`)
-              })
-              
-              const totalClientImageSize = Object.values(clientImages).reduce((sum, img) => sum + img.length, 0)
-              console.log(`💾 Total client images payload: ${Math.round(totalClientImageSize * 0.75 / 1024)}KB`)
-              
-              console.log(`📸 Received ${Object.keys(clientImages).length} pre-extracted images from client`)
-            }
-          } catch (error) {
-            console.log('⚠️ No pre-extracted images or parsing failed, will use server-side extraction')
-            console.log(`🔍 Pre-extracted images error:`, error)
-          }
-
           if (!file) {
             throw new Error('No file provided')
           }
@@ -102,16 +72,6 @@ export async function POST(request: NextRequest) {
             
             console.log(`✅ PDF file read successfully: ${fileData.length} bytes, header: ${pdfHeader}`)
             
-            // VERCEL FIX: Create a new Uint8Array to prevent any potential reference issues in serverless environment
-            console.log(`🔧 Creating defensive copy of file data for Vercel serverless environment...`)
-            const defensiveCopy = new Uint8Array(fileData.length)
-            defensiveCopy.set(fileData)
-            fileData = defensiveCopy
-            
-            // Verify the copy is valid
-            const copyHeader = new TextDecoder().decode(fileData.slice(0, 8))
-            console.log(`✅ Defensive copy created successfully: ${fileData.length} bytes, header: ${copyHeader}`)
-            
           } catch (fileError) {
             console.error('❌ File reading error:', fileError)
             throw new Error(`Failed to read PDF file: ${fileError instanceof Error ? fileError.message : 'Unknown error'}`)
@@ -119,44 +79,38 @@ export async function POST(request: NextRequest) {
           
           sendUpdate(3, 'Analyzing PDF structure...')
           
-          // DEBUG: Validate fileData before getPDFPageCount
-          console.log(`🔍 DEBUGGING fileData before getPDFPageCount:`)
-          console.log(`   - fileData.length: ${fileData ? fileData.length : 'undefined'}`)
-          console.log(`   - fileData header: ${fileData ? new TextDecoder().decode(fileData.slice(0, 8)) : 'undefined'}`)
-          
-          // Create a separate copy for getPDFPageCount to prevent corruption
+          // Create a defensive copy for page count to prevent corruption
           const fileDataForPageCount = new Uint8Array(fileData.length)
           fileDataForPageCount.set(fileData)
-          console.log(`📄 Created separate copy for page count: ${fileDataForPageCount.length} bytes`)
           
           const totalPages = await getPDFPageCount(fileDataForPageCount)
           
-          // DEBUG: Validate fileData after getPDFPageCount
-          console.log(`🔍 DEBUGGING fileData after getPDFPageCount:`)
-          console.log(`   - fileData.length: ${fileData ? fileData.length : 'undefined'}`)
-          console.log(`   - fileData header: ${fileData ? new TextDecoder().decode(fileData.slice(0, 8)) : 'undefined'}`)
-          
           sendUpdate(5, `Found ${totalPages} pages. Starting translation with ${userTier} tier...`)
 
-          const results = await processIndividualPagesSplit(
-            fileData,
+          // Create another defensive copy for processing
+          const fileDataForProcessing = new Uint8Array(fileData.length)
+          fileDataForProcessing.set(fileData)
+          
+          const results = await processDocumentSmart(
+            fileDataForProcessing,
             targetLanguage,
             totalPages,
             userTier,
-            clientImages,
+            {}, // No pre-extracted images - backend handles everything
             sendUpdate,
             result => {
               // Send individual result to frontend when page completes
               if (!controllerClosed) {
                 try {
-                  console.log(`🎯 SENDING INDIVIDUAL RESULT for page ${result.page_number}`)
-                  
                   const resultData = JSON.stringify({
-                    type: 'result',
-                    result: result
+                    type: 'translation',
+                    translation: result,
+                    progress: Math.round((result.page_number / totalPages) * 90) + 5,
+                    message: `Completed page ${result.page_number}/${totalPages}`,
+                    total_pages: totalPages,
+                    current_page: result.page_number
                   })
                   
-                  console.log(`📤 Sending individual result (${resultData.length} chars)`)
                   controller.enqueue(encoder.encode(`data: ${resultData}\n\n`))
                 } catch (error) {
                   console.error('Error sending individual result:', error)
@@ -174,7 +128,7 @@ export async function POST(request: NextRequest) {
             try {
               console.log(`🎯 SENDING COMPLETION MESSAGE for ${results.length} pages`)
               
-              // Create a lightweight completion message first (essential data only)
+              // Create a truly lightweight completion message (no results array)
               const lightweightCompletion = JSON.stringify({
                 type: 'complete',
                 progress: 100,
@@ -183,28 +137,30 @@ export async function POST(request: NextRequest) {
                   total_pages: totalPages,
                   processed_pages: results.length,
                   user_tier: userTier,
+                  job_id: '',
                   has_results: true
                 },
                 resultsCount: results.length,
                 hasResults: true
+                // NOTE: Results are not included here to keep message small
+                // Individual results were already sent via resultCallback during processing
               })
               
               console.log(`📤 Lightweight completion message size: ${lightweightCompletion.length} chars`)
               controller.enqueue(encoder.encode(`data: ${lightweightCompletion}\n\n`))
               
-              // Then send the full results in a separate message if needed
-              const fullResults = JSON.stringify({
-                type: 'results',
-                results: results
+              // Send a separate small summary message if helpful
+              const summaryMessage = JSON.stringify({
+                type: 'summary',
+                total_pages: totalPages,
+                processed_pages: results.length,
+                successful_pages: results.filter(r => !r.notes?.includes('error')).length,
+                error_pages: results.filter(r => r.notes?.includes('error')).length,
+                message: 'All individual page results have been sent. Processing complete.'
               })
               
-              // Only send full results if they're not too large
-              if (fullResults.length < 30000) {
-                console.log(`📤 Sending full results (${fullResults.length} chars)`)
-                controller.enqueue(encoder.encode(`data: ${fullResults}\n\n`))
-              } else {
-                console.log(`⚠️ Results too large (${fullResults.length} chars), frontend should use existing results`)
-              }
+              console.log(`📤 Sending processing summary (${summaryMessage.length} chars)`)
+              controller.enqueue(encoder.encode(`data: ${summaryMessage}\n\n`))
               
               console.log(`✅ Completion messages sent, closing controller...`)
               controller.close()

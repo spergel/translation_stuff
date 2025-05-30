@@ -1,6 +1,7 @@
 // Document chunking utilities for processing large PDFs
-import { PDFDocument as PDFLibDocument } from 'pdf-lib'
+import { PDFDocument, PDFPage } from 'pdf-lib'
 import { TranslationResult } from '../types/translation'
+import { delay } from './jsonUtils'
 
 export interface DocumentChunk {
   chunkIndex: number
@@ -27,7 +28,7 @@ export async function splitPDFIntoChunks(
   console.log(`📄 Splitting ${totalPages}-page PDF into chunks of ${maxPagesPerChunk} pages...`)
   
   const chunks: DocumentChunk[] = []
-  const originalPdf = await PDFLibDocument.load(originalPdfData)
+  const originalPdf = await PDFDocument.load(originalPdfData)
   
   for (let startPage = 1; startPage <= totalPages; startPage += maxPagesPerChunk) {
     const endPage = Math.min(startPage + maxPagesPerChunk - 1, totalPages)
@@ -36,7 +37,7 @@ export async function splitPDFIntoChunks(
     console.log(`📦 Creating chunk ${chunkIndex + 1}: pages ${startPage}-${endPage}`)
     
     // Create new PDF with just this chunk's pages
-    const chunkPdf = await PDFLibDocument.create()
+    const chunkPdf = await PDFDocument.create()
     const pageIndices = Array.from(
       { length: endPage - startPage + 1 }, 
       (_, i) => startPage - 1 + i
@@ -136,9 +137,9 @@ export async function processChunksInBatches<T>(
     
     console.log(`✅ Batch complete: ${batchResults.length} chunks processed`)
     
-    // Small delay between batches to be nice to the API
+    // Add delay between batches to avoid overwhelming the API
     if (i + maxConcurrentChunks < chunks.length) {
-      await new Promise(resolve => setTimeout(resolve, 1000))
+      await delay(1000)
     }
   }
   

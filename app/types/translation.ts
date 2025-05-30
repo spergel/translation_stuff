@@ -27,16 +27,16 @@ export interface TranslationMetadata {
 export interface TranslationJob {
   id: string
   filename: string
-  status: 'uploading' | 'processing' | 'completed' | 'error' | 'extracting-images' | 'cancelled'
+  status: 'uploading' | 'processing' | 'completed' | 'error' | 'cancelled'
   progress: number
+  originalFile?: File
   results?: TranslationResult[]
   error?: string
-  metadata?: TranslationMetadata
-  originalFile?: File // Store original file for image extraction
   currentPage?: number
   totalPages?: number
-  abortController?: AbortController // For cancelling ongoing requests
-  statusMessage?: string // Detailed status message for better UX
+  abortController?: AbortController
+  metadata?: TranslationMetadata
+  statusMessage?: string
 }
 
 export type UserTier = 'free' | 'basic' | 'pro' | 'enterprise'

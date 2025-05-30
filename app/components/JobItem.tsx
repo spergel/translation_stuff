@@ -4,36 +4,88 @@ import React from 'react'
 import { FileText, Download, Eye, X } from 'lucide-react'
 import { TranslationJob } from '../types/translation'
 import { useDownloads } from '../hooks/useDownloads'
-import { generateHTML } from '../utils/downloads'
+import { generateHTML, generateTranslationOnlyHTML } from '../utils/htmlGenerators'
 
 interface JobItemProps {
   job: TranslationJob
   onDelete: (jobId: string) => void
+  getAllJobs?: () => TranslationJob[]
+  downloadFormat: 'pdf' | 'html'
 }
 
-export default function JobItem({ job, onDelete }: JobItemProps) {
+export default function JobItem({ job, onDelete, getAllJobs, downloadFormat }: JobItemProps) {
   const downloads = useDownloads()
+  const [isLoadingSideBySide, setIsLoadingSideBySide] = React.useState(false)
+  const [showQuickView, setShowQuickView] = React.useState(false)
 
-  const openQuickView = () => {
+  const handleSideBySideView = async () => {
+    setIsLoadingSideBySide(true)
+    try {
+      console.log('🕐 Waiting for images before opening side-by-side view...')
+      
+      // Get the latest job state if possible
+      const getLatestJob = (): TranslationJob => {
+        if (getAllJobs) {
+          const latestJob = getAllJobs().find(j => j.id === job.id)
+          if (latestJob) {
+            console.log(`📸 Using latest job state: ${latestJob.results?.filter(r => r.page_image && r.page_image.length > 0).length || 0}/${latestJob.results?.length || 0} pages have images`)
+            return latestJob
+          }
+        }
+        console.log(`📸 Using prop job state: ${job.results?.filter(r => r.page_image && r.page_image.length > 0).length || 0}/${job.results?.length || 0} pages have images`)
+        return job
+      }
+      
+      const currentJob = getLatestJob()
+      console.log(`📸 Current images status: ${currentJob.results?.filter(r => r.page_image && r.page_image.length > 0).length || 0}/${currentJob.results?.length || 0} pages have images`)
+      
+      // Give more time for images to load and check the latest state periodically
+      const jobWithImages = await downloads.waitForImages(currentJob, 8000, getLatestJob)
+      
+      // Get the absolute latest state before opening
+      const finalJob = getLatestJob()
+      const finalImageCount = finalJob.results?.filter(r => r.page_image && r.page_image.length > 0).length || 0
+      console.log(`📸 Final images before side-by-side: ${finalImageCount}/${finalJob.results?.length || 0} pages have images`)
+      
+      downloads.viewSideBySide(finalJob)
+    } catch (error) {
+      console.error('Error waiting for images:', error)
+      console.log('🔄 Opening side-by-side anyway after timeout...')
+      const fallbackJob = getAllJobs ? getAllJobs().find(j => j.id === job.id) || job : job
+      downloads.viewSideBySide(fallbackJob) // Open anyway after timeout
+    } finally {
+      setIsLoadingSideBySide(false)
+    }
+  }
+
+  const openTranslationOnly = () => {
     if (!job.results) {
       alert('No translation results available')
       return
     }
-    console.log('Opening quick view for:', job.filename, 'with', job.results.length, 'pages')
+    console.log('Opening translation-only view for:', job.filename, 'with', job.results.length, 'pages')
     try {
-      const html = generateHTML(job.results, job.filename)
-      console.log('Generated HTML length:', html.length)
+      // Generate translation-only HTML and open in new window
+      const html = generateTranslationOnlyHTML(job.results, job.filename)
       const newWindow = window.open('', '_blank')
       if (newWindow) {
         newWindow.document.write(html)
         newWindow.document.close()
-        console.log('Quick view opened successfully')
+        console.log('Translation-only view opened successfully')
       } else {
         alert('Failed to open new window. Please check if popups are blocked.')
       }
     } catch (error) {
-      console.error('Error opening quick view:', error)
+      console.error('Error opening translation-only view:', error)
       alert('Error opening view: ' + (error instanceof Error ? error.message : 'Unknown error'))
+    }
+  }
+
+  const handleDownload = () => {
+    if (downloadFormat === 'pdf') {
+      downloads.downloadPDF(job)
+    } else {
+      downloads.downloadHTML(job)
     }
   }
 
@@ -43,47 +95,42 @@ export default function JobItem({ job, onDelete }: JobItemProps) {
         <div className="flex items-center space-x-3">
           <FileText className="h-6 w-6 text-primary-300" />
           <span className="font-medium text-gray-900">{job.filename}</span>
-          <span className={`px-2 py-1 text-xs rounded-full ${
+          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
             job.status === 'completed' ? 'bg-green-100 text-green-800' :
-            job.status === 'error' ? 'bg-red-100 text-red-800' :
-            job.status === 'cancelled' ? 'bg-orange-100 text-orange-800' :
             job.status === 'processing' ? 'bg-blue-100 text-blue-800' :
-            job.status === 'extracting-images' ? 'bg-purple-100 text-purple-800' :
+            job.status === 'uploading' ? 'bg-yellow-100 text-yellow-800' :
+            job.status === 'error' ? 'bg-red-100 text-red-800' :
+            job.status === 'cancelled' ? 'bg-gray-100 text-gray-800' :
             'bg-gray-100 text-gray-800'
           }`}>
-            {job.status === 'extracting-images' ? 'extracting images' : job.status}
+            {job.status}
           </span>
         </div>
         <div className="flex items-center space-x-2">
           {job.status === 'completed' && job.results && (
             <>
               <button
-                onClick={() => downloads.viewSideBySide(job)}
-                className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                onClick={handleSideBySideView}
+                disabled={isLoadingSideBySide}
+                className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Eye className="h-4 w-4" />
-                <span>Side-by-Side</span>
+                <span>{isLoadingSideBySide ? 'Loading...' : 'Side-by-Side'}</span>
               </button>
+              
               <button
-                onClick={openQuickView}
+                onClick={openTranslationOnly}
                 className="flex items-center space-x-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
               >
                 <Eye className="h-4 w-4" />
-                <span>Quick View</span>
-              </button>
-              <button
-                onClick={() => downloads.previewStructuredLayout(job)}
-                className="flex items-center space-x-1 px-3 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
-              >
-                <Eye className="h-4 w-4" />
-                <span>Preview Layout</span>
+                <span>Translation Only</span>
               </button>
               
               {/* Download Dropdown Menu */}
               <div className="relative group">
-                <button className="flex items-center space-x-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors">
+                <button className="flex items-center space-x-1 px-3 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors">
                   <Download className="h-4 w-4" />
-                  <span>Download</span>
+                  <span>Download {downloadFormat.toUpperCase()}</span>
                   <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
@@ -97,108 +144,58 @@ export default function JobItem({ job, onDelete }: JobItemProps) {
                     </div>
                     
                     <button
-                      onClick={() => downloads.downloadOriginalNextToTranslation(job)}
+                      onClick={handleDownload}
                       className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                     >
-                      <div className="font-medium">Original + Translation</div>
-                      <div className="text-xs text-gray-500">Side-by-side comparison</div>
-                    </button>
-                    
-                    <button
-                      onClick={() => downloads.downloadOriginalImageNextToTranslation(job)}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                    >
-                      <div className="font-medium">Original Image + Translation</div>
-                      <div className="text-xs text-gray-500">Clean image with translation only</div>
+                      <div className="font-medium">Side-by-Side {downloadFormat === 'pdf' ? 'PDF' : 'HTML'}</div>
+                      <div className="text-xs text-gray-500">Original image with translation</div>
                     </button>
                     
                     <button
                       onClick={() => downloads.downloadOriginalNextToTranscription(job)}
                       className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                     >
-                      <div className="font-medium">Original + Transcription</div>
-                      <div className="text-xs text-gray-500">Original text with clean transcription</div>
+                      <div className="font-medium">Original + Transcription HTML</div>
+                      <div className="text-xs text-gray-500">Original image with transcribed text</div>
                     </button>
                     
                     <button
                       onClick={() => downloads.downloadOriginalTranscriptionTranslation(job)}
                       className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                     >
-                      <div className="font-medium">Original + Transcription + Translation</div>
+                      <div className="font-medium">Original + Transcription + Translation HTML</div>
                       <div className="text-xs text-gray-500">Complete three-column analysis</div>
                     </button>
-                    
-                    <button
-                      onClick={() => downloads.downloadTranscriptionNextToTranslation(job)}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                    >
-                      <div className="font-medium">Transcription + Translation</div>
-                      <div className="text-xs text-gray-500">Clean text with translation</div>
-                    </button>
-                    
-                    <button
-                      onClick={() => downloads.downloadTranslationOnly(job)}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                    >
-                      <div className="font-medium">Translation Only</div>
-                      <div className="text-xs text-gray-500">Clean, readable translation</div>
-                    </button>
-                    
-                    <div className="border-t border-gray-100 mt-2 pt-2">
-                      <button
-                        onClick={() => downloads.downloadHTML(job)}
-                        className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                      >
-                        <div className="font-medium">Legacy HTML Format</div>
-                        <div className="text-xs text-gray-500">Original format (deprecated)</div>
-                      </button>
-                      
-                      <button
-                        onClick={() => downloads.downloadPDF(job)}
-                        className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                      >
-                        <div className="font-medium">Structured PDF</div>
-                        <div className="text-xs text-gray-500">PDF with layout preservation</div>
-                      </button>
-                    </div>
                   </div>
                 </div>
               </div>
             </>
           )}
-          <button
-            onClick={() => onDelete(job.id)}
-            className={`flex items-center space-x-1 px-3 py-2 text-white rounded-md transition-colors ${
-              job.status === 'processing' || job.status === 'uploading' || job.status === 'extracting-images'
-                ? 'bg-orange-600 hover:bg-orange-700'
-                : 'bg-red-600 hover:bg-red-700'
-            }`}
-            title={
-              job.status === 'processing' || job.status === 'uploading' || job.status === 'extracting-images'
-                ? 'Cancel translation and delete job'
-                : 'Delete this job'
-            }
-          >
-            <X className="h-4 w-4" />
-            <span>
-              {job.status === 'processing' || job.status === 'uploading' || job.status === 'extracting-images'
-                ? 'Cancel'
-                : 'Delete'
-              }
-            </span>
-          </button>
+          {/* Show cancel button for active jobs */}
+          {(job.status === 'processing' || job.status === 'uploading') && (
+            <button
+              onClick={() => onDelete(job.id)}
+              className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+          {/* Show delete button for completed/error jobs */}
+          {(job.status === 'completed' || job.status === 'error' || job.status === 'cancelled') && (
+            <button
+              onClick={() => onDelete(job.id)}
+              className="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition-colors"
+            >
+              Delete
+            </button>
+          )}
         </div>
       </div>
 
       <div className="mb-4">
         <div className="flex justify-between text-sm text-gray-600 mb-1">
           <span className="capitalize">{job.status}</span>
-          <span>
-            {job.currentPage && job.totalPages ? 
-              `Page ${job.currentPage} / ${job.totalPages}` : 
-              `${job.progress}%`
-            }
-          </span>
+          <span>{job.progress}%</span>
         </div>
         <div className="w-full bg-gray-200 rounded-full h-2">
           <div 
@@ -233,30 +230,6 @@ export default function JobItem({ job, onDelete }: JobItemProps) {
               : job.error
             }
           </p>
-        </div>
-      )}
-
-      {job.results && job.results.length > 0 && (
-        <div className="mt-4">
-          <h3 className="font-medium text-gray-900 mb-2">
-            Translation Preview ({job.results.length} pages)
-            {job.results.some(r => r.notes?.includes('error') || r.notes?.includes('failed') || r.translated_text?.includes('Could not process')) && (
-              <span className="ml-2 px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded-full">
-                Some pages had issues
-              </span>
-            )}
-          </h3>
-          <div className="bg-gray-50 rounded-md p-4 max-h-40 overflow-y-auto">
-            <p className="text-sm text-gray-700">
-              {job.results[0].translated_text.substring(0, 200)}...
-            </p>
-            {job.results.some(r => r.notes?.includes('error') || r.notes?.includes('failed') || r.translated_text?.includes('Could not process')) && (
-              <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-700">
-                <strong>Note:</strong> Some pages encountered transmission or processing errors. 
-                These pages will show placeholder text or partial content in the final download.
-              </div>
-            )}
-          </div>
         </div>
       )}
     </div>

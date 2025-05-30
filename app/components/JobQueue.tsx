@@ -1,4 +1,3 @@
-
 'use client'
 
 import React from 'react'
@@ -22,27 +21,25 @@ export default function JobQueue({
   onDownloadHTML,
   onPreviewJob
 }: JobQueueProps) {
-  const getStatusColor = (status: TranslationJob['status']) => {
+  const getStatusColor = (status: string) => {
     switch (status) {
-      case 'uploading': return 'bg-blue-500'
-      case 'processing': return 'bg-yellow-500'
       case 'completed': return 'bg-green-500'
       case 'error': return 'bg-red-500'
-      case 'extracting-images': return 'bg-purple-500'
-      case 'cancelled': return 'bg-gray-500'
+      case 'cancelled': return 'bg-orange-500'
+      case 'processing': return 'bg-blue-500'
+      case 'uploading': return 'bg-yellow-500'
       default: return 'bg-gray-500'
     }
   }
 
-  const getStatusText = (status: TranslationJob['status']) => {
+  const getStatusText = (status: string) => {
     switch (status) {
-      case 'uploading': return 'Uploading'
-      case 'processing': return 'Processing'
       case 'completed': return 'Completed'
       case 'error': return 'Error'
-      case 'extracting-images': return 'Extracting Images'
       case 'cancelled': return 'Cancelled'
-      default: return 'Unknown'
+      case 'processing': return 'Processing'
+      case 'uploading': return 'Uploading'
+      default: return status
     }
   }
 
@@ -194,7 +191,7 @@ export default function JobQueue({
           </div>
 
           {/* Progress Bar */}
-          {(job.status === 'uploading' || job.status === 'processing' || job.status === 'extracting-images') && (
+          {(job.status === 'uploading' || job.status === 'processing') && (
             <div className="mb-3">
               <div className="flex justify-between text-sm text-gray-600 mb-1">
                 <span>

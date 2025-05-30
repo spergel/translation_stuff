@@ -16,54 +16,67 @@ export interface TierConfig {
 export const TIER_CONFIGS: Record<string, TierConfig> = {
   free: {
     name: 'Free',
-    maxPages: 20, // Per chunk limit (was 10)
-    batchSize: 1,
+    maxPages: 50, // Increased from 20 (per chunk limit)
+    batchSize: 5, // Increased from 2 for better performance
     maxFileSize: 10,
     priority: 'low',
     monthlyPageLimit: 100, // 100 pages per month
     subscriptionPrice: 0,
-    costPerPage: 0.000161,
+    costPerPage: 0.0000805, // Updated for Flash 8B (half the cost)
     profitMargin: 0, // Free tier - no profit
     overageRate: 0.01 // $0.01 per page over limit
   },
   
-  starter: {
-    name: 'Starter ($4.99/month)',
-    maxPages: 20, // Per chunk limit (consistent across tiers)
-    batchSize: 2,
+  basic: {
+    name: 'Basic ($4.99/month)',
+    maxPages: 100, // Increased from 20 (per chunk limit)
+    batchSize: 20, // Increased from 4 for much better async performance
     maxFileSize: 25,
     priority: 'normal',
     monthlyPageLimit: 500, // 500 pages per month
     subscriptionPrice: 4.99,
-    costPerPage: 0.000161,
-    profitMargin: 98, // ~98% profit margin (cost: $0.08, price: $4.99)
+    costPerPage: 0.0000805, // Updated for Flash 8B
+    profitMargin: 99, // Even higher profit margin with cheaper costs
     overageRate: 0.005 // $0.005 per page over limit
   },
   
   pro: {
     name: 'Pro ($14.99/month)',
-    maxPages: 20, // Per chunk limit (consistent across tiers)
-    batchSize: 3,
+    maxPages: 200, // Increased from 20 (per chunk limit)
+    batchSize: 50, // Increased from 6 for much better async performance
     maxFileSize: 100,
     priority: 'normal',
     monthlyPageLimit: 2000, // 2000 pages per month  
     subscriptionPrice: 14.99,
-    costPerPage: 0.000161,
-    profitMargin: 98, // ~98% profit margin (cost: $0.32, price: $14.99)
+    costPerPage: 0.0000805, // Updated for Flash 8B
+    profitMargin: 99, // Even higher profit margin
     overageRate: 0.003 // $0.003 per page over limit
   },
   
   business: {
     name: 'Business ($39.99/month)',
-    maxPages: 20, // Per chunk limit (consistent across tiers)
-    batchSize: 5,
+    maxPages: -1, // Unlimited pages
+    batchSize: 75, // Increased from 10 for maximum async performance
     maxFileSize: 500,
     priority: 'high',
     monthlyPageLimit: 15000, // 15k pages per month (increased from 10k)
     subscriptionPrice: 39.99,
-    costPerPage: 0.000161,
-    profitMargin: 94, // ~94% profit margin (cost: $2.42, price: $39.99)
+    costPerPage: 0.0000805, // Updated for Flash 8B
+    profitMargin: 97, // Higher profit margin with cheaper costs
     overageRate: 0.002 // $0.002 per page over limit
+  },
+  
+  enterprise: {
+    name: 'Enterprise ($99.99/month)',
+    maxPages: -1, // Unlimited pages
+    batchSize: 100, // Increased to 100 pages per batch as requested!
+    maxFileSize: 2000, // 2GB max file size
+    priority: 'high',
+    monthlyPageLimit: 50000, // 50k pages per month
+    subscriptionPrice: 99.99,
+    costPerPage: 0.0000805, // Updated for Flash 8B
+    profitMargin: 99, // Excellent margins with cheaper model
+    overageRate: 0.001 // $0.001 per page over limit
   }
 }
 

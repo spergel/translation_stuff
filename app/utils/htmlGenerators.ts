@@ -85,6 +85,15 @@ export function generateHTML(results: TranslationResult[], filename: string): st
 export function generateSideBySideHTML(results: TranslationResult[], filename: string): string {
   const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
   
+  // DEBUG: Log each page's image status during HTML generation
+  console.log(`🖼️ DEBUG: Generating HTML for ${filename} with ${sortedResults.length} pages:`)
+  sortedResults.forEach(page => {
+    console.log(`   Page ${page.page_number}:`)
+    console.log(`     - has page_image: ${!!page.page_image}`)
+    console.log(`     - page_image length: ${page.page_image ? page.page_image.length : 'N/A'}`)
+    console.log(`     - starts with data: ${page.page_image ? page.page_image.startsWith('data:') : 'N/A'}`)
+  })
+  
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -140,8 +149,9 @@ export function generateSideBySideHTML(results: TranslationResult[], filename: s
             background-color: #f9f9f9;
             border: 1px solid #e0e0e0;
             border-radius: 5px;
-            padding: 15px;
+            padding: 20px;
             margin-bottom: 15px;
+            text-align: center;
         }
         .original-text {
             white-space: pre-line;
@@ -154,7 +164,9 @@ export function generateSideBySideHTML(results: TranslationResult[], filename: s
             height: auto;
             border: 1px solid #ddd;
             border-radius: 5px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+            min-height: 400px;
+            object-fit: contain;
         }
         .translation {
             white-space: pre-line;
@@ -203,11 +215,8 @@ export function generateSideBySideHTML(results: TranslationResult[], filename: s
             <div class="original">
                 <div class="section-title">Original Content</div>
                 <div class="original-content">
-                    ${page.original_text ? `
-                        <div class="original-text">${formatTranslationText(page.original_text)}</div>
-                    ` : ''}
                     ${page.page_image && page.page_image.length > 0 ? `
-                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/png;base64,${page.page_image}`}" 
+                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/jpeg;base64,${page.page_image}`}" 
                              alt="Page ${page.page_number} Image" 
                              class="page-image" />
                     ` : `
@@ -230,119 +239,66 @@ export function generateSideBySideHTML(results: TranslationResult[], filename: s
 </html>`
 }
 
-export function generateOriginalNextToTranslationHTML(results: TranslationResult[], filename: string): string {
+export function generateTranslationOnlyHTML(results: TranslationResult[], filename: string): string {
   const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
   
   return `<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Original & Translation: ${filename}</title>
+    <title>Translation: ${filename}</title>
     <style>
         body {
             font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.6;
-            max-width: 1400px;
+            line-height: 1.8;
+            max-width: 800px;
             margin: 0 auto;
-            padding: 20px;
-            background-color: #f8f5f0;
-            color: #333;
+            padding: 40px 20px;
+            background-color: #fefefe;
+            color: #2c3e50;
         }
         h1 {
             text-align: center;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
+            color: #2c3e50;
+            font-size: 2.2em;
+            margin-bottom: 40px;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 15px;
         }
         .page {
+            margin-bottom: 40px;
+            padding: 30px;
             background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border-left: 5px solid #3498db;
         }
         .page-number {
-            text-align: center;
-            color: #8D6E63;
-            font-size: 1.1em;
+            color: #7f8c8d;
+            font-size: 0.9em;
             font-weight: bold;
             margin-bottom: 20px;
-            border-bottom: 1px solid #ddd;
-            padding-bottom: 10px;
-        }
-        .content-row {
-            display: flex;
-            gap: 30px;
-        }
-        .original-column, .translation-column {
-            flex: 1;
-        }
-        .column-header {
-            font-weight: bold;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 5px;
-            margin-bottom: 15px;
-        }
-        .original-image {
             text-align: center;
-            background-color: #f9f9f9;
-            padding: 15px;
-            border-left: 4px solid #8D6E63;
-            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
-        .original-image img {
-            max-width: 100%;
-            height: auto;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        .translation {
+            font-size: 1.1em;
+            line-height: 1.8;
+            text-align: justify;
+            color: #2c3e50;
         }
-        .no-image-placeholder {
-            background-color: #f9f9f9;
-            padding: 40px 15px;
-            border-left: 4px solid #8D6E63;
-            text-align: center;
-            color: #666;
-            font-style: italic;
-            border-radius: 4px;
-        }
-        .translation-text {
-            background-color: #f0f8ff;
-            padding: 15px;
-            border-left: 4px solid #4CAF50;
-            white-space: pre-line;
-            border-radius: 4px;
+        .translation p {
+            margin-bottom: 1.2em;
         }
     </style>
 </head>
 <body>
-    <h1>Original Document & Translation: ${filename}</h1>
+    <h1>English Translation: ${filename}</h1>
     ${sortedResults.map(page => `
     <div class="page">
         <div class="page-number">Page ${page.page_number}</div>
-        <div class="content-row">
-            <div class="original-column">
-                <div class="column-header">Original Page Image</div>
-                ${page.page_image && page.page_image.length > 0 ? `
-                    <div class="original-image">
-                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/png;base64,${page.page_image}`}" 
-                             alt="Page ${page.page_number} Original" />
-                    </div>
-                ` : `
-                    <div class="no-image-placeholder">
-                        Original Page ${page.page_number}<br>
-                        <small>(Image not available)</small>
-                    </div>
-                `}
-            </div>
-            <div class="translation-column">
-                <div class="column-header">English Translation</div>
-                <div class="translation-text">${page.translated_text}</div>
-            </div>
-        </div>
+        <div class="translation">${formatTranslationText(page.translated_text)}</div>
     </div>
     `).join('')}
 </body>
@@ -448,7 +404,7 @@ export function generateOriginalNextToTranscriptionHTML(results: TranslationResu
                 <div class="column-header">Original Page Image</div>
                 ${page.page_image && page.page_image.length > 0 ? `
                     <div class="original-image">
-                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/png;base64,${page.page_image}`}" 
+                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/jpeg;base64,${page.page_image}`}" 
                              alt="Page ${page.page_number} Original" />
                     </div>
                 ` : `
@@ -578,7 +534,7 @@ export function generateOriginalTranscriptionTranslationHTML(results: Translatio
                 <div class="column-header">Original Page Image</div>
                 ${page.page_image && page.page_image.length > 0 ? `
                     <div class="original-image">
-                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/png;base64,${page.page_image}`}" 
+                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/jpeg;base64,${page.page_image}`}" 
                              alt="Page ${page.page_number} Original" />
                     </div>
                 ` : `
@@ -591,285 +547,6 @@ export function generateOriginalTranscriptionTranslationHTML(results: Translatio
             <div class="transcription-column">
                 <div class="column-header">Transcribed Text</div>
                 <div class="transcription-text">${page.original_text || 'Transcription not available'}</div>
-            </div>
-            <div class="translation-column">
-                <div class="column-header">English Translation</div>
-                <div class="translation-text">${page.translated_text}</div>
-            </div>
-        </div>
-    </div>
-    `).join('')}
-</body>
-</html>`
-}
-
-export function generateTranscriptionNextToTranslationHTML(results: TranslationResult[], filename: string): string {
-  const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
-  
-  return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Transcription & Translation: ${filename}</title>
-    <style>
-        body {
-            font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.6;
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f8f5f0;
-            color: #333;
-        }
-        h1 {
-            text-align: center;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-        }
-        .page {
-            background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .page-number {
-            text-align: center;
-            color: #8D6E63;
-            font-size: 1.1em;
-            font-weight: bold;
-            margin-bottom: 20px;
-            border-bottom: 1px solid #ddd;
-            padding-bottom: 10px;
-        }
-        .content-row {
-            display: flex;
-            gap: 30px;
-        }
-        .transcription-column, .translation-column {
-            flex: 1;
-        }
-        .column-header {
-            font-weight: bold;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 5px;
-            margin-bottom: 15px;
-        }
-        .transcription-text {
-            background-color: #fff8e1;
-            padding: 15px;
-            border-left: 4px solid #FF9800;
-            white-space: pre-line;
-            font-family: 'Courier New', monospace;
-            border-radius: 4px;
-        }
-        .translation-text {
-            background-color: #f0f8ff;
-            padding: 15px;
-            border-left: 4px solid #4CAF50;
-            white-space: pre-line;
-            border-radius: 4px;
-        }
-    </style>
-</head>
-<body>
-    <h1>Transcription & Translation: ${filename}</h1>
-    ${sortedResults.map(page => `
-    <div class="page">
-        <div class="page-number">Page ${page.page_number}</div>
-        <div class="content-row">
-            <div class="transcription-column">
-                <div class="column-header">Transcribed Text</div>
-                <div class="transcription-text">${page.original_text || 'Transcription not available'}</div>
-            </div>
-            <div class="translation-column">
-                <div class="column-header">English Translation</div>
-                <div class="translation-text">${page.translated_text}</div>
-            </div>
-        </div>
-    </div>
-    `).join('')}
-</body>
-</html>`
-}
-
-export function generateTranslationOnlyHTML(results: TranslationResult[], filename: string): string {
-  const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
-  
-  return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Translation: ${filename}</title>
-    <style>
-        body {
-            font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.8;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 40px 20px;
-            background-color: #fefefe;
-            color: #2c3e50;
-        }
-        h1 {
-            text-align: center;
-            color: #2c3e50;
-            font-size: 2.2em;
-            margin-bottom: 40px;
-            border-bottom: 3px solid #3498db;
-            padding-bottom: 15px;
-        }
-        .page {
-            margin-bottom: 40px;
-            padding: 30px;
-            background-color: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            border-left: 5px solid #3498db;
-        }
-        .page-number {
-            color: #7f8c8d;
-            font-size: 0.9em;
-            font-weight: bold;
-            margin-bottom: 20px;
-            text-align: center;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        .translation {
-            font-size: 1.1em;
-            line-height: 1.8;
-            text-align: justify;
-            color: #2c3e50;
-        }
-        .translation p {
-            margin-bottom: 1.2em;
-        }
-    </style>
-</head>
-<body>
-    <h1>English Translation: ${filename}</h1>
-    ${sortedResults.map(page => `
-    <div class="page">
-        <div class="page-number">Page ${page.page_number}</div>
-        <div class="translation">${formatTranslationText(page.translated_text)}</div>
-    </div>
-    `).join('')}
-</body>
-</html>`
-}
-
-export function generateOriginalImageNextToTranslationHTML(results: TranslationResult[], filename: string): string {
-  const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
-  
-  return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Original Image & Translation: ${filename}</title>
-    <style>
-        body {
-            font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.6;
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f8f5f0;
-            color: #333;
-        }
-        h1 {
-            text-align: center;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-        }
-        .page {
-            background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .page-number {
-            text-align: center;
-            color: #8D6E63;
-            font-size: 1.1em;
-            font-weight: bold;
-            margin-bottom: 20px;
-            border-bottom: 1px solid #ddd;
-            padding-bottom: 10px;
-        }
-        .content-row {
-            display: flex;
-            gap: 30px;
-        }
-        .original-column, .translation-column {
-            flex: 1;
-        }
-        .column-header {
-            font-weight: bold;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 5px;
-            margin-bottom: 15px;
-        }
-        .original-image {
-            text-align: center;
-            background-color: #f9f9f9;
-            padding: 15px;
-            border-left: 4px solid #8D6E63;
-            border-radius: 4px;
-        }
-        .original-image img {
-            max-width: 100%;
-            height: auto;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .no-image-placeholder {
-            background-color: #f9f9f9;
-            padding: 40px 15px;
-            border-left: 4px solid #8D6E63;
-            text-align: center;
-            color: #666;
-            font-style: italic;
-            border-radius: 4px;
-        }
-        .translation-text {
-            background-color: #f0f8ff;
-            padding: 15px;
-            border-left: 4px solid #4CAF50;
-            white-space: pre-line;
-            border-radius: 4px;
-        }
-    </style>
-</head>
-<body>
-    <h1>Original Image & Translation: ${filename}</h1>
-    ${sortedResults.map(page => `
-    <div class="page">
-        <div class="page-number">Page ${page.page_number}</div>
-        <div class="content-row">
-            <div class="original-column">
-                <div class="column-header">Original Page Image</div>
-                ${page.page_image && page.page_image.length > 0 ? `
-                    <div class="original-image">
-                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/png;base64,${page.page_image}`}" 
-                             alt="Page ${page.page_number} Original" />
-                    </div>
-                ` : `
-                    <div class="no-image-placeholder">
-                        Original Page ${page.page_number}<br>
-                        <small>(Image not available)</small>
-                    </div>
-                `}
             </div>
             <div class="translation-column">
                 <div class="column-header">English Translation</div>

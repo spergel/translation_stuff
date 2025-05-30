@@ -3,8 +3,125 @@ import { PDFDocument as PDFLibDocument } from 'pdf-lib'
 import { getDocument } from 'pdfjs-serverless'
 import { TranslationResult } from '../types/translation'
 import { TIER_CONFIGS, TierConfig } from '../config/tiers'
-import { extractPageImageFromPDF } from './imageExtraction'
 import { fixBrokenJSON } from './jsonUtils'
+import { 
+  splitPDFIntoChunks, 
+  mergeChunkResults, 
+  getChunkProcessingStrategy, 
+  processChunksInBatches,
+  DocumentChunk,
+  ChunkResult 
+} from './documentChunking'
+
+// Validation function to check if translation actually occurred
+function validateTranslation(originalText: string, translatedText: string, targetLanguage: string, pageNum: number): boolean {
+  if (!originalText || !translatedText) {
+    console.log(`❌ Page ${pageNum}: Missing text - original: ${!!originalText}, translated: ${!!translatedText}`)
+    return false
+  }
+
+  // Check if texts are identical (likely means no translation occurred)
+  if (originalText.trim() === translatedText.trim()) {
+    console.log(`❌ Page ${pageNum}: Translation identical to original - likely not translated`)
+    return false
+  }
+
+  // Check if the translation is too similar (simple similarity check)
+  const similarity = calculateStringSimilarity(originalText, translatedText)
+  if (similarity > 0.9) {
+    console.log(`❌ Page ${pageNum}: Translation too similar to original (${Math.round(similarity * 100)}% similar)`)
+    return false
+  }
+
+  // Basic language detection - check for common non-English characters if target is English
+  if (targetLanguage.toLowerCase() === 'english') {
+    // Check for Cyrillic (Russian, etc.)
+    const cyrillicPattern = /[А-Яа-яЁё]/
+    // Check for Chinese/Japanese characters
+    const cjkPattern = /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]/
+    // Check for Arabic script
+    const arabicPattern = /[\u0600-\u06ff]/
+    // Check for other common non-Latin scripts
+    const otherPattern = /[\u0370-\u03ff\u0590-\u05ff\u0900-\u097f]/
+    
+    if (cyrillicPattern.test(translatedText)) {
+      console.log(`❌ Page ${pageNum}: Translation contains Cyrillic characters when English was requested`)
+      return false
+    }
+    if (cjkPattern.test(translatedText)) {
+      console.log(`❌ Page ${pageNum}: Translation contains CJK characters when English was requested`)
+      return false
+    }
+    if (arabicPattern.test(translatedText)) {
+      console.log(`❌ Page ${pageNum}: Translation contains Arabic characters when English was requested`)
+      return false
+    }
+    if (otherPattern.test(translatedText)) {
+      console.log(`❌ Page ${pageNum}: Translation contains non-Latin characters when English was requested`)
+      return false
+    }
+    
+    // Check for common non-English words that indicate failed translation
+    const commonNonEnglishWords = [
+      // Russian
+      'русский', 'текст', 'страница', 'документ', 'глава', 'часть',
+      // German  
+      'deutsch', 'seite', 'kapitel', 'teil', 'dokument',
+      // French
+      'français', 'texte', 'page', 'chapitre', 'partie',
+      // Spanish
+      'español', 'texto', 'página', 'capítulo', 'parte'
+    ]
+    
+    const lowerTranslated = translatedText.toLowerCase()
+    const foundNonEnglish = commonNonEnglishWords.find(word => lowerTranslated.includes(word))
+    if (foundNonEnglish) {
+      console.log(`❌ Page ${pageNum}: Translation contains non-English word "${foundNonEnglish}" when English was requested`)
+      return false
+    }
+  }
+
+  // Check minimum translation length (should be reasonably substantial)
+  if (translatedText.trim().length < 10) {
+    console.log(`❌ Page ${pageNum}: Translation too short (${translatedText.trim().length} chars)`)
+    return false
+  }
+
+  console.log(`✅ Page ${pageNum}: Translation validation passed`)
+  return true
+}
+
+// Helper function to calculate string similarity
+function calculateStringSimilarity(str1: string, str2: string): number {
+  const longer = str1.length > str2.length ? str1 : str2
+  const shorter = str1.length > str2.length ? str2 : str1
+  
+  if (longer.length === 0) return 1.0
+  
+  const editDistance = getEditDistance(longer, shorter)
+  return (longer.length - editDistance) / longer.length
+}
+
+// Helper function to calculate edit distance (Levenshtein distance)
+function getEditDistance(str1: string, str2: string): number {
+  const matrix = Array(str2.length + 1).fill(null).map(() => Array(str1.length + 1).fill(null))
+  
+  for (let i = 0; i <= str1.length; i++) matrix[0][i] = i
+  for (let j = 0; j <= str2.length; j++) matrix[j][0] = j
+  
+  for (let j = 1; j <= str2.length; j++) {
+    for (let i = 1; i <= str1.length; i++) {
+      const indicator = str1[i - 1] === str2[j - 1] ? 0 : 1
+      matrix[j][i] = Math.min(
+        matrix[j][i - 1] + 1,     // deletion
+        matrix[j - 1][i] + 1,     // insertion
+        matrix[j - 1][i - 1] + indicator // substitution
+      )
+    }
+  }
+  
+  return matrix[str2.length][str1.length]
+}
 
 // Helper function to extract page count from PDF
 export async function getPDFPageCount(fileData: Uint8Array): Promise<number> {
@@ -96,11 +213,21 @@ export async function processSinglePage(
   // STRUCTURED OUTPUT PROMPT - using Gemini's built-in JSON schema
   const pagePrompt = `You are processing PAGE ${pageNum} of a ${totalPages}-page document.
 
-Extract and translate this page to ${targetLanguage}. 
+CRITICAL TASK: You must do TWO separate steps:
+1. EXTRACT the original text from this page exactly as it appears
+2. TRANSLATE that text completely into ${targetLanguage}
+
+TRANSLATION REQUIREMENTS:
+- You MUST translate ALL text into ${targetLanguage}
+- Do NOT leave any text in the original language in the translated_text field
+- If the original text is already in ${targetLanguage}, still provide a clean version in translated_text
+- Use proper ${targetLanguage} grammar and vocabulary
+- Maintain the document structure with newlines (\\n) between paragraphs
 
 IMPORTANT: This is page number ${pageNum}. Please return this exact page number in your response.
 
-Extract the original text from this page and provide a clear translation. Use newlines (\\n) to separate paragraphs and maintain the document structure.
+The original_text field should contain the exact text as it appears on the page.
+The translated_text field should contain ONLY the ${targetLanguage} translation.
 
 ${pdfDescription.includes('full PDF') ? `IMPORTANT: This PDF contains multiple pages, but you should ONLY process and extract text from PAGE ${pageNum}. Ignore all other pages.` : ''}`
 
@@ -127,7 +254,7 @@ ${pdfDescription.includes('full PDF') ? `IMPORTANT: This PDF contains multiple p
     ],
     generationConfig: {
       temperature: 0.1,
-      maxOutputTokens: 4000,
+      maxOutputTokens: 8000,
       responseMimeType: "application/json",
       responseSchema: {
         type: "OBJECT",
@@ -138,11 +265,11 @@ ${pdfDescription.includes('full PDF') ? `IMPORTANT: This PDF contains multiple p
           },
           original_text: {
             type: "STRING", 
-            description: "The original text extracted from this page"
+            description: "The exact original text extracted from this page in its original language"
           },
           translated_text: {
             type: "STRING",
-            description: "The translation of the text in the target language"
+            description: `The complete translation of the original text into ${targetLanguage}. This MUST be in ${targetLanguage} and MUST NOT contain text in the original language.`
           }
         },
         required: ["page_number", "original_text", "translated_text"]
@@ -159,7 +286,7 @@ ${pdfDescription.includes('full PDF') ? `IMPORTANT: This PDF contains multiple p
   console.log(`📋 Expected JSON schema: page_number, original_text, translated_text`)
 
   const translationPromise = (async () => {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GOOGLE_API_KEY}`, {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent?key=${process.env.GOOGLE_API_KEY}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -251,6 +378,67 @@ ${pdfDescription.includes('full PDF') ? `IMPORTANT: This PDF contains multiple p
     console.log(`📊 Extraction quality: ${pageData.original_text?.length > 10 ? 'Good' : 'Poor/Empty'}`)
     
     console.log(`✅ Page ${pageNum} parsed successfully - Original: ${pageData.original_text?.length || 0} chars, Translation: ${pageData.translated_text?.length || 0} chars`)
+    
+    // 🚨 VALIDATION: Check if translation actually occurred
+    const isTranslationValid = validateTranslation(pageData.original_text, pageData.translated_text, targetLanguage, pageNum)
+    
+    if (!isTranslationValid) {
+      console.log(`⚠️ Translation validation failed for page ${pageNum}, attempting retry with stronger prompt...`)
+      
+      // Retry with more explicit prompt
+      const retryPrompt = `URGENT: The previous translation attempt failed. You MUST translate this text.
+
+ORIGINAL TEXT TO TRANSLATE:
+${pageData.original_text}
+
+TARGET LANGUAGE: ${targetLanguage}
+
+You must provide a complete translation of the above text into ${targetLanguage}. Do not return the original text - only the translated version.
+
+Respond with valid JSON in this exact format:
+{
+  "page_number": ${pageNum},
+  "original_text": "${pageData.original_text?.replace(/"/g, '\\"') || ''}",
+  "translated_text": "[YOUR TRANSLATION IN ${targetLanguage} HERE]"
+}`
+
+      try {
+        const retryResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent?key=${process.env.GOOGLE_API_KEY}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: retryPrompt }] }],
+            generationConfig: {
+              temperature: 0.3,
+              maxOutputTokens: 4000,
+              responseMimeType: "application/json"
+            }
+          }),
+          signal: AbortSignal.timeout(30000)
+        })
+
+        if (retryResponse.ok) {
+          const retryResult = await retryResponse.json()
+          const retryText = retryResult.candidates?.[0]?.content?.parts?.[0]?.text?.trim()
+          
+          if (retryText) {
+            const retryData = JSON.parse(retryText)
+            const retryValid = validateTranslation(retryData.original_text, retryData.translated_text, targetLanguage, pageNum)
+            
+            if (retryValid) {
+              console.log(`✅ Translation retry succeeded for page ${pageNum}`)
+              pageData = retryData
+            } else {
+              console.log(`❌ Translation retry also failed for page ${pageNum}`)
+            }
+          }
+        }
+      } catch (retryError) {
+        console.error(`❌ Translation retry failed for page ${pageNum}:`, retryError)
+      }
+    }
   } catch (parseError) {
     console.warn(`⚠️ JSON parse error for page ${pageNum}, attempting backup fix...`)
     
@@ -264,10 +452,13 @@ ${pdfDescription.includes('full PDF') ? `IMPORTANT: This PDF contains multiple p
   }
 
   // Extract image from the original full PDF's page data
-  const pageImage = await extractPageImageFromPDF(originalPdfBytes, pageNum, clientImages)
+  let pageImage = ''
+  // Server-side image extraction disabled in serverless environment
+  // Images can be added by client-side extraction if needed
+  console.log(`📝 Page ${pageNum} processed text-only (serverless environment)`)
 
   if (progressCallback) {
-    progressCallback(100, `Page ${pageNum} complete with text and image`)
+    progressCallback(100, `Page ${pageNum} complete (text-only)`)
   }
 
   // 🚨 DETAILED LOGGING: Final page result summary
@@ -275,7 +466,8 @@ ${pdfDescription.includes('full PDF') ? `IMPORTANT: This PDF contains multiple p
   console.log(`📝 Original text: ${pageData.original_text?.length || 0} chars`)
   console.log(`🌍 Translated text: ${pageData.translated_text?.length || 0} chars`)
   console.log(`🖼️ Page image: ${pageImage ? Math.round(pageImage.length / 1000) : 0}KB`)
-  console.log(`📸 Image source: ${clientImages && clientImages[pageNum] ? 'CLIENT (pre-extracted)' : pageImage ? 'SERVER (extracted)' : 'NONE'}`)
+  console.log(`📸 Image source: ${clientImages && clientImages[pageNum] ? 'CLIENT (pre-extracted)' : pageImage ? 'SERVER (extracted)' : 'NONE - TEXT ONLY'}`)
+  console.log(`✅ Processing mode: ${pageImage ? 'TEXT + IMAGE' : 'TEXT-ONLY (reliable)'}`)
 
   return {
     page_number: pageNum, // Force use our loop page number instead of AI's response
@@ -318,14 +510,19 @@ export async function processBatchOfPages(
     // Process all pages in this batch concurrently
     const batchPromises = pageNumbers.map(pageNum => 
       processSinglePage(originalPdfBytes, pageNum, targetLanguage, totalPages, clientImages, (pageProgress, pageMessage) => {
-        // When a page completes, update the main progress
-        if (pageProgress === 100) {
-          completedInBatch++
-          const totalCompleted = completedPagesCount + completedInBatch
-          const overallProgress = Math.round((totalCompleted / totalPages) * 90) + 5
+        // Provide more granular progress updates for individual pages
+        if (pageProgress >= 50) { // When a page is halfway done
+          const totalCompleted = completedPagesCount + (completedInBatch + (pageProgress / 100))
+          const overallProgress = Math.round((totalCompleted / totalPages) * 80) + 10
           
-          console.log(`✅ Page ${pageNum} completed: ${pageMessage}`)
-          progressCallback(overallProgress, `Completed ${totalCompleted}/${totalPages} pages`)
+          if (pageProgress === 100) {
+            completedInBatch++
+            console.log(`✅ Page ${pageNum} completed: ${pageMessage}`)
+            progressCallback(overallProgress, `Completed ${completedPagesCount + completedInBatch}/${totalPages} pages`)
+          } else {
+            // More frequent progress updates as pages are being processed
+            progressCallback(overallProgress, `Processing page ${pageNum}... (${Math.round(pageProgress)}% done)`)
+          }
         }
       }).then(result => {
         // Send individual result to frontend when page completes
@@ -333,10 +530,40 @@ export async function processBatchOfPages(
           resultCallback(result)
         }
         return result
+      }).catch(pageError => {
+        console.error(`❌ Page ${pageNum} failed in batch:`, pageError)
+        // Return error result instead of throwing to prevent batch failure
+        const errorResult = {
+          page_number: pageNum,
+          original_text: 'Individual page processing failed',
+          translated_text: 'Unable to translate this page',
+          layout_structure: {
+            page_type: 'error_page',
+            sections: [{
+              type: 'paragraph',
+              content: 'Unable to translate this page',
+              formatting: 'normal',
+              position: 'left'
+            }],
+            columns: 1,
+            has_images: false,
+            special_elements: []
+          },
+          notes: `Page ${pageNum} processing error: ${pageError instanceof Error ? pageError.message : 'Unknown error'}`,
+          page_image: ''
+        }
+        
+        // Send error result to frontend
+        if (resultCallback) {
+          resultCallback(errorResult)
+        }
+        
+        return errorResult
       })
     )
     
     // Wait for all pages in the batch to complete
+    console.log(`⏳ Waiting for all ${pageNumbers.length} pages in batch to complete...`)
     const batchResults = await Promise.all(batchPromises)
     
     const batchEndTime = Date.now()
@@ -345,9 +572,15 @@ export async function processBatchOfPages(
     
     console.log(`✅ BATCH COMPLETE: ${pageNumbers.length} pages in ${batchTime}s (${timePerPage}s per page)`)
     
+    // Count successful vs error results
+    const successfulResults = batchResults.filter(r => !r.notes?.includes('processing error'))
+    const errorResults = batchResults.filter(r => r.notes?.includes('processing error'))
+    
+    console.log(`📊 Batch results: ${successfulResults.length} successful, ${errorResults.length} errors`)
+    
     // Final batch completion update
     const newCompletedCount = completedPagesCount + pageNumbers.length
-    const progress = Math.round((newCompletedCount / totalPages) * 90) + 5
+    const progress = Math.round((newCompletedCount / totalPages) * 80) + 10
     
     progressCallback(
       progress, 
@@ -457,38 +690,78 @@ export async function processIndividualPagesSplit(
         
         console.log(`📦 Starting batch ${batchIndex + 1}/${batches.length}: pages [${batch.join(', ')}]`)
         
-        // DEBUG: Validate fileData before passing to batch processing
-        console.log(`🔍 Validating fileData before batch ${batchIndex + 1}: ${fileData.length} bytes`)
-        
-        // CRITICAL FIX: Create a fresh copy for each batch to prevent pdf-lib from corrupting the original
-        console.log(`🔧 Creating fresh copy of fileData for batch ${batchIndex + 1} processing...`)
-        const fileDataCopyForBatch = new Uint8Array(fileData.length)
-        fileDataCopyForBatch.set(fileData)
-        console.log(`✅ Fresh copy created for batch ${batchIndex + 1}: ${fileDataCopyForBatch.length} bytes`)
-        
-        const batchResults = await processBatchOfPages(
-          fileDataCopyForBatch, // Pass fresh copy instead of original
-          batch,
-          targetLanguage,
-          totalPages,
-          clientImages, // Pass client images for batch processing
-          progressCallback,
-          results.length, // Pass current completed count
-          result => {
-            results.push(result)
-            // Send individual result to frontend if callback provided
-            if (resultCallback) {
-              resultCallback(result)
+        try {
+          // DEBUG: Validate fileData before passing to batch processing
+          console.log(`🔍 Validating fileData before batch ${batchIndex + 1}: ${fileData.length} bytes`)
+          
+          // CRITICAL FIX: Create a fresh copy for each batch to prevent pdf-lib from corrupting the original
+          console.log(`🔧 Creating fresh copy of fileData for batch ${batchIndex + 1} processing...`)
+          const fileDataCopyForBatch = new Uint8Array(fileData.length)
+          fileDataCopyForBatch.set(fileData)
+          console.log(`✅ Fresh copy created for batch ${batchIndex + 1}: ${fileDataCopyForBatch.length} bytes`)
+          
+          const batchResults = await processBatchOfPages(
+            fileDataCopyForBatch, // Pass fresh copy instead of original
+            batch,
+            targetLanguage,
+            totalPages,
+            clientImages, // Pass client images for batch processing
+            progressCallback,
+            results.length, // Pass current completed count
+            result => {
+              results.push(result)
+              // Send individual result to frontend if callback provided
+              if (resultCallback) {
+                resultCallback(result)
+              }
             }
+          )
+          
+          console.log(`✅ Batch ${batchIndex + 1} completed successfully with ${batchResults.length} pages`)
+          console.log(`📊 Progress: ${results.length}/${maxPagesToProcess} pages completed`)
+          
+          // Small delay between batches to avoid overwhelming the API
+          if (batchIndex < batches.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500))
           }
-        )
-        
-        // batchResults should already be in results from the callback
-        console.log(`📊 Progress: ${results.length}/${maxPagesToProcess} pages completed`)
-        
-        // Small delay between batches to avoid overwhelming the API
-        if (batchIndex < batches.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 500))
+          
+        } catch (batchError) {
+          console.error(`❌ Batch ${batchIndex + 1} failed:`, batchError)
+          
+          // Add error results for all pages in this batch
+          batch.forEach(pageNum => {
+            const errorResult = {
+              page_number: pageNum,
+              original_text: 'Batch processing encountered an issue',
+              translated_text: 'Unable to translate this page in current batch',
+              layout_structure: {
+                page_type: 'error_page',
+                sections: [{
+                  type: 'paragraph',
+                  content: 'Unable to translate this page in current batch',
+                  formatting: 'normal',
+                  position: 'left'
+                }],
+                columns: 1,
+                has_images: false,
+                special_elements: []
+              },
+              notes: `Page ${pageNum} - batch ${batchIndex + 1} processing issue: ${batchError instanceof Error ? batchError.message : 'Unknown error'}`,
+              page_image: ''
+            }
+            
+            results.push(errorResult)
+            
+            // Send individual error result to frontend if callback provided
+            if (resultCallback) {
+              resultCallback(errorResult)
+            }
+          })
+          
+          console.log(`📊 Progress after batch error: ${results.length}/${maxPagesToProcess} pages completed`)
+          
+          // Continue to next batch even if this one failed
+          continue
         }
       }
       
@@ -510,9 +783,20 @@ export async function processIndividualPagesSplit(
           console.log(`✅ Fresh copy created for page ${pageNum}: ${fileDataCopyForPage.length} bytes`)
 
           const pageResult = await processSinglePage(fileDataCopyForPage, pageNum, targetLanguage, totalPages, clientImages, (pageProgress, pageMessage) => {
-            // Don't spam with individual page progress in sequential mode
-            if (pageProgress === 100) {
-              console.log(`✅ Page ${pageNum} completed: ${pageMessage}`)
+            // Provide more granular progress updates during sequential processing
+            if (pageProgress >= 25) { // Update every 25% of page progress
+              const completedPages = results.length
+              const currentPageProgress = pageProgress / 100
+              const totalCompleted = completedPages + currentPageProgress
+              const overallProgress = Math.round((totalCompleted / maxPagesToProcess) * 80) + 10
+              
+              if (pageProgress === 100) {
+                console.log(`✅ Page ${pageNum} completed: ${pageMessage}`)
+                progressCallback(overallProgress, `Completed ${pageNum}/${maxPagesToProcess} pages`)
+              } else {
+                // More frequent updates during page processing
+                progressCallback(overallProgress, `Processing page ${pageNum}/${maxPagesToProcess} (${Math.round(pageProgress)}% done)`)
+              }
             }
           })
           results.push(pageResult)
@@ -521,13 +805,6 @@ export async function processIndividualPagesSplit(
           if (resultCallback) {
             resultCallback(pageResult)
           }
-
-          // Update cumulative progress
-          const progress = Math.round((results.length / maxPagesToProcess) * 90) + 5
-          progressCallback(
-            progress,
-            `Completed ${results.length}/${maxPagesToProcess} pages`
-          )
 
           // Small delay between requests for sequential processing
           await new Promise(resolve => setTimeout(resolve, 100))
@@ -555,7 +832,7 @@ export async function processIndividualPagesSplit(
           })
           
           // Still update progress even for problematic pages
-          const progress = Math.round((results.length / maxPagesToProcess) * 90) + 5
+          const progress = Math.round((results.length / maxPagesToProcess) * 80) + 10
           progressCallback(progress, `Completed ${results.length}/${maxPagesToProcess} pages (page ${pageNum} had issues)`)
         }
       }
@@ -600,4 +877,202 @@ export async function processIndividualPagesSplit(
     console.error('Error in processing:', error)
     throw error
   }
+}
+
+// NEW: Chunked processing for large documents
+export async function processDocumentWithChunking(
+  fileData: Uint8Array,
+  targetLanguage: string,
+  totalPages: number,
+  userTier: string = 'free',
+  clientImages: Record<number, string> = {},
+  progressCallback: (progress: number, message: string) => void,
+  resultCallback?: (result: TranslationResult) => void
+): Promise<TranslationResult[]> {
+  console.log(`🧩 Starting chunked document processing for ${totalPages} pages...`)
+  
+  const tierConfig = TIER_CONFIGS[userTier] || TIER_CONFIGS.free
+  const strategy = getChunkProcessingStrategy(totalPages, userTier, 20)
+  
+  console.log(`📊 Chunking strategy:`, strategy)
+  progressCallback(5, `Analyzing ${totalPages} pages, creating ${strategy.chunkCount} chunks...`)
+  
+  // Split document into chunks
+  const chunks = await splitPDFIntoChunks(fileData, totalPages, 20)
+  progressCallback(10, `Created ${chunks.length} chunks. Starting translation...`)
+  
+  // Process chunks with tier-based concurrency
+  let completedChunks = 0
+  let allResults: TranslationResult[] = []
+  
+  const processChunk = async (chunk: DocumentChunk): Promise<ChunkResult> => {
+    console.log(`🔄 Processing chunk ${chunk.chunkIndex + 1}: pages ${chunk.startPage}-${chunk.endPage}`)
+    
+    // Create filtered client images for this chunk
+    const chunkClientImages: Record<number, string> = {}
+    for (let page = chunk.startPage; page <= chunk.endPage; page++) {
+      if (clientImages[page]) {
+        chunkClientImages[page] = clientImages[page]
+      }
+    }
+    
+    // Process this chunk using existing batch processing logic
+    const chunkPageNumbers = Array.from(
+      { length: chunk.pageCount }, 
+      (_, i) => i + 1 // Use 1-based indexing within the chunk
+    )
+    
+    const chunkTranslationResults = await processBatchOfPages(
+      chunk.pdfData,
+      chunkPageNumbers,
+      targetLanguage,
+      chunk.pageCount, // Total pages in this chunk
+      {}, // Don't pass client images here since they're for the original document context
+      (progress, message) => {
+        // Update overall progress
+        const chunkProgress = progress / 100
+        const overallProgress = 10 + ((completedChunks + chunkProgress) / chunks.length) * 80
+        progressCallback(
+          Math.round(overallProgress), 
+          `Chunk ${chunk.chunkIndex + 1}/${chunks.length}: ${message}`
+        )
+      },
+      0, // No previously completed pages in chunk context
+      (result) => {
+        // Adjust page numbers back to original document context
+        const adjustedResult: TranslationResult = {
+          ...result,
+          page_number: chunk.startPage + result.page_number - 1
+        }
+        
+        // Send individual result to frontend
+        if (resultCallback) {
+          resultCallback(adjustedResult)
+        }
+      }
+    )
+    
+    // Adjust page numbers in results to match original document
+    const adjustedResults = chunkTranslationResults.map(result => ({
+      ...result,
+      page_number: chunk.startPage + result.page_number - 1
+    }))
+    
+    completedChunks++
+    console.log(`✅ Chunk ${chunk.chunkIndex + 1} complete: ${adjustedResults.length} pages`)
+    
+    return {
+      chunkIndex: chunk.chunkIndex,
+      results: adjustedResults,
+      clientImages: chunkClientImages
+    }
+  }
+  
+  // 🚀 NEW: Process chunks asynchronously with batching for tier limits
+  console.log(`🚀 Processing ${chunks.length} chunks with max concurrency: ${strategy.maxConcurrentChunks}`)
+  
+  const allChunkResults: ChunkResult[] = []
+  
+  // Process chunks in batches based on tier concurrency limits
+  for (let i = 0; i < chunks.length; i += strategy.maxConcurrentChunks) {
+    const chunkBatch = chunks.slice(i, i + strategy.maxConcurrentChunks)
+    const batchNumber = Math.floor(i / strategy.maxConcurrentChunks) + 1
+    const totalBatches = Math.ceil(chunks.length / strategy.maxConcurrentChunks)
+    
+    console.log(`🎯 Starting chunk batch ${batchNumber}/${totalBatches}: chunks ${chunkBatch.map(c => c.chunkIndex + 1).join(', ')} (${chunkBatch.length} chunks concurrent)`)
+    
+    // Process all chunks in this batch concurrently
+    const batchPromises = chunkBatch.map(chunk => processChunk(chunk))
+    const batchResults = await Promise.all(batchPromises)
+    
+    allChunkResults.push(...batchResults)
+    
+    console.log(`✅ Chunk batch ${batchNumber}/${totalBatches} complete: ${batchResults.length} chunks processed`)
+    
+    // Small delay between chunk batches to be nice to the API
+    if (i + strategy.maxConcurrentChunks < chunks.length) {
+      await new Promise(resolve => setTimeout(resolve, 1000))
+    }
+  }
+  
+  progressCallback(90, `Merging results from ${chunks.length} chunks...`)
+  
+  // Merge all chunk results
+  const finalResults = mergeChunkResults(allChunkResults)
+  
+  progressCallback(95, `Translation complete! Processed ${finalResults.length} pages.`)
+  
+  console.log(`🎉 Chunked processing complete: ${finalResults.length} pages from ${chunks.length} chunks`)
+  return finalResults
+}
+
+// Enhanced main processing function that chooses between chunked and direct processing
+export async function processDocumentSmart(
+  fileData: Uint8Array,
+  targetLanguage: string,
+  totalPages: number,
+  userTier: string = 'free',
+  clientImages: Record<number, string> = {},
+  progressCallback: (progress: number, message: string) => void,
+  resultCallback?: (result: TranslationResult) => void
+): Promise<TranslationResult[]> {
+  const tierConfig = TIER_CONFIGS[userTier] || TIER_CONFIGS.free
+  const maxPagesToProcess = tierConfig.maxPages === -1 ? totalPages : Math.min(totalPages, tierConfig.maxPages)
+  
+  console.log(`🤖 Smart processing decision for ${totalPages} pages (processing ${maxPagesToProcess})...`)
+  
+  // NEW: More aggressive async processing limits
+  // Use direct processing for smaller docs OR if tier doesn't support high concurrency
+  const shouldUseChunking = totalPages > 200 || (totalPages > 100 && tierConfig.batchSize < 3)
+  
+  if (shouldUseChunking) {
+    console.log(`🧩 Using CHUNKED processing (${totalPages} pages, tier: ${tierConfig.name})`)
+    console.log(`📋 Reason: Very large document or limited tier concurrency`)
+    return await processDocumentWithChunking(
+      fileData,
+      targetLanguage,
+      totalPages,
+      userTier,
+      clientImages,
+      progressCallback,
+      resultCallback
+    )
+  } else {
+    console.log(`🚀 Using DIRECT ASYNC processing (${totalPages} pages, tier: ${tierConfig.name})`)
+    console.log(`📋 Reason: Manageable size with good tier concurrency`)
+    return await processIndividualPagesSplit(
+      fileData,
+      targetLanguage,
+      totalPages,
+      userTier,
+      clientImages,
+      progressCallback,
+      resultCallback
+    )
+  }
+}
+
+// At the top of the file, add this new function for text-only processing
+export async function processDocumentTextOnly(
+  fileData: Uint8Array,
+  targetLanguage: string,
+  totalPages: number,
+  userTier: string = 'free',
+  progressCallback: (progress: number, message: string) => void,
+  resultCallback?: (result: TranslationResult) => void
+): Promise<TranslationResult[]> {
+  console.log(`🚀 Starting text-only processing for ${totalPages} pages`)
+  
+  // Use the same logic as processDocumentSmart but force no images
+  const emptyClientImages: Record<number, string> = {}
+  
+  return await processDocumentSmart(
+    fileData,
+    targetLanguage,
+    totalPages,
+    userTier,
+    emptyClientImages,
+    progressCallback,
+    resultCallback
+  )
 } 

@@ -20,7 +20,7 @@ export async function extractPageImageFromPDF(fileData: Uint8Array, pageNumber: 
   
   // 🚨 DETAILED LOGGING: Server-side extraction needed
   console.log(`\n🔧 SERVER-SIDE IMAGE EXTRACTION FOR PAGE ${pageNumber}:`)
-  console.log(`📄 No client image available, extracting server-side`)
+  console.log(`📄 No client image available, attempting server-side extraction`)
   console.log(`🛠️ Method: pdfjs-serverless + canvas`)
   
   try {
@@ -75,27 +75,20 @@ export async function extractPageImageFromPDF(fileData: Uint8Array, pageNumber: 
     // Validate that we didn't just create an empty/white canvas
     if (dataUrl.length < 5000) {
       console.warn(`⚠️ Generated image for page ${pageNumber} is very small (${dataUrl.length} chars), might be empty`)
-      
-      // Try alternative rendering approach
-      console.log(`🔄 Attempting alternative rendering for page ${pageNumber}...`)
-      return await renderPageAlternativeMethod(pdfDocument, pageNumber)
+      console.log(`📝 Continuing with text-only processing for page ${pageNumber}`)
+      return ''
     }
     
     console.log(`✅ Successfully extracted image for page ${pageNumber} using pdfjs-serverless/canvas (${dataUrl.length} chars)`)
     return dataUrl
 
   } catch (error) {
-    console.warn(`⚠️ Image extraction failed for page ${pageNumber} with pdfjs-serverless/canvas:`, error instanceof Error ? error.message : String(error))
+    console.warn(`⚠️ Image extraction failed for page ${pageNumber}:`, error instanceof Error ? error.message : String(error))
+    console.log(`📝 Continuing with text-only processing for page ${pageNumber} (this is normal and expected)`)
     
-    // Skip Puppeteer in development environment to avoid local setup issues
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`🚫 Skipping Puppeteer fallback in development environment`)
-      return ''
-    }
-    
-    // Try Puppeteer-based extraction as fallback only in production
-    console.log(`🔄 Attempting Puppeteer-based image extraction for page ${pageNumber}...`)
-    return await extractImageWithPuppeteer(fileData, pageNumber)
+    // Don't try Puppeteer - just return empty string for text-only processing
+    console.log(`🚀 Text-only mode: Translation will proceed without image for page ${pageNumber}`)
+    return ''
   }
 }
 

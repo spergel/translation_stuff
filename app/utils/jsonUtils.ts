@@ -1,5 +1,52 @@
 // JSON parsing and fixing utilities
 
+// Utility function for delays (consolidating repeated setTimeout patterns)
+export function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// PDF validation utility (consolidating repeated header checks)
+export function validatePDFHeader(fileData: Uint8Array, context: string = ''): void {
+  const pdfHeader = String.fromCharCode.apply(null, Array.from(fileData.slice(0, 8)))
+  console.log(`🔍 PDF header verification${context ? ` ${context}` : ''}: "${pdfHeader}"`)
+  
+  if (!pdfHeader.startsWith('%PDF-')) {
+    throw new Error(`Invalid PDF header${context ? ` ${context}` : ''}: ${pdfHeader}`)
+  }
+}
+
+// Safe Uint8Array copying utility (prevents corruption from PDF libraries)
+export function safeCopyPDFData(originalData: Uint8Array, context: string = ''): Uint8Array {
+  console.log(`🔧 Creating safe copy of PDF data${context ? ` ${context}` : ''}: ${originalData.length} bytes`)
+  const copy = new Uint8Array(originalData.length)
+  copy.set(originalData)
+  console.log(`✅ Safe copy created${context ? ` ${context}` : ''}: ${copy.length} bytes`)
+  return copy
+}
+
+// Error result creation utility (consolidating repeated error result patterns)
+export function createErrorResult(pageNumber: number, errorMessage: string, context: string = ''): any {
+  return {
+    page_number: pageNumber,
+    original_text: context || 'Page processing encountered an issue',
+    translated_text: errorMessage,
+    layout_structure: {
+      page_type: 'error_page',
+      sections: [{
+        type: 'paragraph',
+        content: errorMessage,
+        formatting: 'normal',
+        position: 'left'
+      }],
+      columns: 1,
+      has_images: false,
+      special_elements: []
+    },
+    notes: `Page ${pageNumber}${context ? ` - ${context}` : ''}: ${errorMessage}`,
+    page_image: ''
+  }
+}
+
 // Backup function to fix broken JSON responses
 export async function fixBrokenJSON(brokenText: string, pageNumber: number): Promise<any> {
   console.log(`🔧 Attempting to fix broken JSON for page ${pageNumber}...`)
@@ -20,7 +67,7 @@ ${brokenText.substring(0, 8000)}`
         }],
         generationConfig: {
           temperature: 0.1,
-          maxOutputTokens: 2000
+          maxOutputTokens: 8000
         }
       }),
       signal: AbortSignal.timeout(30000) // 30 second timeout for backup call

@@ -8,86 +8,25 @@ import { TranslationResult, TranslationJob, TranslationMetadata } from './types/
 import JobItem from './components/JobItem'
 import DownloadAllButton from './components/DownloadAllButton'
 
-// Test function for PDF.js debugging
-const testPDFJS = async () => {
-  try {
-    console.log('Testing PDF.js functionality...')
-    
-    // Check if PDF.js is available
-    const pdfjsLib = await import('pdfjs-dist')
-    console.log('PDF.js imported successfully:', pdfjsLib)
-    
-    // Check worker setup
-    console.log('Worker source:', pdfjsLib.GlobalWorkerOptions.workerSrc)
-    
-    // Test worker availability
-    try {
-      const testResponse = await fetch(pdfjsLib.GlobalWorkerOptions.workerSrc)
-      console.log('Worker file accessible:', testResponse.ok, testResponse.status)
-    } catch (workerError) {
-      console.error('Worker file not accessible:', workerError)
-    }
-    
-    // Test with a simple PDF creation
-    const canvas = document.createElement('canvas')
-    const context = canvas.getContext('2d')
-    if (context) {
-      canvas.width = 200
-      canvas.height = 100
-      context.fillStyle = 'white'
-      context.fillRect(0, 0, 200, 100)
-      context.fillStyle = 'red'
-      context.fillRect(10, 10, 50, 50)
-      context.fillStyle = 'black'
-      context.font = '16px Arial'
-      context.fillText('Test', 70, 40)
-      
-      const dataUrl = canvas.toDataURL('image/png')
-      console.log('Canvas test successful, data URL length:', dataUrl.length)
-      
-      // Display the test image
-      const img = document.createElement('img')
-      img.src = dataUrl
-      img.style.position = 'fixed'
-      img.style.top = '10px'
-      img.style.right = '10px'
-      img.style.zIndex = '9999'
-      img.style.border = '2px solid red'
-      document.body.appendChild(img)
-      
-      setTimeout(() => document.body.removeChild(img), 3000)
-      
-    } else {
-      console.error('Canvas context not available')
-    }
-    
-    // Test PDF.js configuration
-    console.log('PDF.js configuration test complete')
-    alert('PDF.js test completed! Check console for detailed results.')
-    
-  } catch (error) {
-    console.error('PDF.js test failed:', error)
-    alert(`PDF.js test failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
-  }
-}
-
 export default function Home() {
   const [jobs, setJobs] = useState<TranslationJob[]>([])
   const [selectedLanguage, setSelectedLanguage] = useState('english')
   const [userTier, setUserTier] = useState('free')
+  const [globalDownloadFormat, setGlobalDownloadFormat] = useState<'pdf' | 'html'>('pdf') // Global PDF/HTML toggle
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     // Check file limits based on tier
     const tierConfig = {
-      free: { maxFiles: 1, maxPages: 20 },
+      free: { maxFiles: 1, maxPages: 50 },
       basic: { maxFiles: 2, maxPages: 100 },
       pro: { maxFiles: 5, maxPages: 500 },
+      business: { maxFiles: 10, maxPages: -1 },
       enterprise: { maxFiles: 10, maxPages: -1 }
     }
     
     const currentTierConfig = tierConfig[userTier as keyof typeof tierConfig] || tierConfig.free
     const currentActiveJobs = jobs.filter(job => 
-      job.status === 'uploading' || job.status === 'processing' || job.status === 'extracting-images'
+      job.status === 'uploading' || job.status === 'processing'
     ).length
     
     // Check if adding these files would exceed the limit
@@ -105,17 +44,16 @@ export default function Home() {
         return false
       }
       
-      // Warn about large files
+      // Log file size but don't block with dialogs
       const fileSizeMB = Math.round(file.size / 1024 / 1024 * 100) / 100
       if (fileSizeMB > 50) {
-        const proceed = confirm(`"${file.name}" is ${fileSizeMB}MB. Large PDFs may take longer to process and may timeout on free tier. Continue?`)
-        if (!proceed) return false
+        console.log(`📁 Processing large file: "${file.name}" (${fileSizeMB}MB)`)
       }
       
       return true
     })
 
-    // Quick page count estimation for user awareness
+    // Quick page count estimation for user awareness (but no blocking dialogs)
     for (const file of validFiles) {
       try {
         const arrayBuffer = await file.arrayBuffer()
@@ -127,20 +65,14 @@ export default function Home() {
         
         if (pageCount > 50) {
           const tierMessages = {
-            free: `"${file.name}" has ${pageCount} pages. Free tier is limited to 20 pages and may timeout. Consider upgrading or splitting the document.`,
-            basic: `"${file.name}" has ${pageCount} pages. This will be processed in batches of 20 pages for optimal performance.`,
-            pro: `"${file.name}" has ${pageCount} pages. This will be processed in batches of 40 pages for optimal performance.`,
-            enterprise: `"${file.name}" has ${pageCount} pages. This will be processed in batches of 100 pages for optimal performance.`
+            free: `"${file.name}" has ${pageCount} pages. Processing first ${currentTierConfig.maxPages} pages.`,
+            basic: `"${file.name}" has ${pageCount} pages. Processing in batches for optimal performance.`,
+            pro: `"${file.name}" has ${pageCount} pages. Processing in batches for optimal performance.`,
+            enterprise: `"${file.name}" has ${pageCount} pages. Processing in batches for optimal performance.`
           }
           
           const message = tierMessages[userTier as keyof typeof tierMessages] || tierMessages.free
-          
-          if (userTier === 'free' && pageCount > currentTierConfig.maxPages) {
-            alert(message + `\n\nOnly the first ${currentTierConfig.maxPages} pages will be processed.`)
-          } else {
-            const proceed = confirm(message + `\n\nProceed with processing?`)
-            if (!proceed) return
-          }
+          console.log(`📊 ${message}`)
         } else if (pageCount > 20) {
           console.log(`📊 "${file.name}" has ${pageCount} pages - will skip client-side extraction for optimal performance`)
         }
@@ -157,11 +89,11 @@ export default function Home() {
       return {
         id: jobId,
         filename: file.name,
-        status: 'extracting-images', // Start with image extraction
+        status: 'uploading',
         progress: 0,
         originalFile: file,
         abortController,
-        statusMessage: 'Extracting PDF images...'
+        statusMessage: 'Preparing for translation...'
       }
     })
 
@@ -175,60 +107,56 @@ export default function Home() {
 
       console.log(`📄 Starting processing for: ${file.name} (${Math.round(file.size / 1024 / 1024 * 100) / 100} MB)`)
 
+      // 🚀 Start BOTH processes in parallel (the RIGHT way)
+      console.log(`🚀 Starting parallel processing for: ${file.name}`)
+      console.log(`   📸 Image extraction: Client-side (PDF.js)`)
+      console.log(`   📝 Text translation: Server-side`)
+
+      const startTime = Date.now()
+
       try {
-        // Step 1: Extract images using client-side PDF.js
-        console.log(`🖼️ Extracting images for ${file.name}...`)
-        setJobs(prev => prev.map(j => j.id === job.id ? { 
-          ...j, 
-          status: 'extracting-images', 
-          progress: 10,
-          statusMessage: 'Extracting PDF images using client-side PDF.js...'
-        } : j))
-
-        const extractedImages = await extractImagesFromPDF(file)
+        // Start image extraction in background (CLIENT-SIDE - this works!)
+        const imageExtractionPromise = extractImagesFromPDF(file, {
+          signal: job.abortController?.signal
+        })
         
-        console.log(`✅ Extracted ${extractedImages.length} images for ${file.name}`)
+        // Start text translation (SERVER-SIDE)
         setJobs(prev => prev.map(j => j.id === job.id ? { 
           ...j, 
-          progress: 30,
-          statusMessage: `Extracted ${extractedImages.length} images, starting translation...`
+          status: 'processing', 
+          progress: 10,
+          statusMessage: 'Starting translation... (images extracting in background)'
         } : j))
-
-        // Step 2: Send to API with pre-extracted images
-        setJobs(prev => prev.map(j => j.id === job.id ? { 
-          ...j, 
-          status: 'uploading',
-          progress: 35,
-          statusMessage: 'Uploading file and images to server...'
-        } : j))
-
+        
+        // Create FormData for translation
         const formData = new FormData()
         formData.append('file', file)
         formData.append('targetLanguage', selectedLanguage)
         formData.append('userTier', userTier)
+        formData.append('extractImages', 'false') // Server does text-only for speed
+        formData.append('jobId', job.id)
         
-        // Add pre-extracted images
-        if (extractedImages.length > 0) {
-          formData.append('preExtractedImages', JSON.stringify(extractedImages))
-          console.log(`📸 Sending ${extractedImages.length} pre-extracted images to server`)
-        }
-
+        // Start translation
         const response = await fetch('/api/translate', {
           method: 'POST',
           body: formData,
           signal: job.abortController?.signal
         })
-
+        
         if (!response.ok) {
-          const errorData = await response.json()
-          throw new Error(errorData.error || 'Translation failed')
+          throw new Error(`HTTP error! status: ${response.status}`)
         }
 
         const reader = response.body?.getReader()
-        if (!reader) throw new Error('No response body')
+        if (!reader) {
+          throw new Error('No response body')
+        }
 
-        const startTime = Date.now()
+        const decoder = new TextDecoder()
+        let extractedImages: any[] = []
+        let imagesMerged = false
 
+        // Process translation stream
         while (true) {
           // Check if the request was aborted
           if (job.abortController?.signal.aborted) {
@@ -254,11 +182,6 @@ export default function Home() {
                   continue
                 }
                 
-                // Check for obvious truncation issues
-                if (jsonData.length > 50000) {
-                  console.warn('⚠️ Very large SSE data detected, might be truncated:', jsonData.length, 'chars')
-                }
-                
                 const data = JSON.parse(jsonData)
                 
                 console.log(`📨 Frontend received SSE data for ${file.name}:`, {
@@ -273,9 +196,9 @@ export default function Home() {
                 
                 setJobs(prev => prev.map(currentJob => {
                   if (currentJob.id === job.id) {
-                    // Handle different message types from the new backend
+                    // Handle different message types
                     if (data.type === 'translation' && data.translation) {
-                      // Individual translation result - add to existing results
+                      // Individual translation result
                       const existingResults = currentJob.results || []
                       const updatedResults = [...existingResults]
                       
@@ -290,81 +213,104 @@ export default function Home() {
                       // Sort results by page number
                       updatedResults.sort((a, b) => a.page_number - b.page_number)
                       
-                      // Calculate better progress based on completed pages
+                      // Calculate progress based on completed pages vs total pages
+                      const totalPages = data.total_pages || currentJob.totalPages || Math.max(...updatedResults.map(r => r.page_number))
                       const completedPages = updatedResults.length
-                      const totalPages = currentJob.totalPages || data.translation.page_number
-                      const calculatedProgress = Math.min(95, Math.round((completedPages / totalPages) * 90) + 5)
+                      
+                      // Progress ranges from 10% (start) to 90% (translation complete), then 90-100% for image processing
+                      const translationProgress = Math.min(90, Math.round((completedPages / totalPages) * 80) + 10)
                       
                       return {
                         ...currentJob,
                         status: 'processing',
-                        progress: Math.max(calculatedProgress, data.progress || currentJob.progress),
+                        progress: Math.max(translationProgress, currentJob.progress || 0),
                         results: updatedResults,
                         currentPage: data.translation.page_number,
                         totalPages: totalPages,
-                        statusMessage: `Completed ${completedPages}/${totalPages} pages${data.message ? ` - ${data.message}` : ''}`
+                        statusMessage: `Translating... ${completedPages}/${totalPages} pages completed`
                       }
                     } else if (data.type === 'complete') {
-                      // Final completion message (lightweight)
-                      console.log(`🎯 FRONTEND: Received completion message for ${file.name}`, {
-                        type: data.type,
-                        resultsCount: data.resultsCount,
-                        hasResults: data.hasResults,
-                        progress: data.progress,
-                        metadata: data.metadata
-                      })
-                      return {
-                        ...currentJob,
-                        status: 'completed',
-                        progress: 100,
-                        results: currentJob.results || [], // Keep existing results if no new ones provided
-                        metadata: data.metadata,
-                        statusMessage: `Translation complete! ${data.resultsCount || (currentJob.results || []).length} pages processed.`
-                      }
-                    } else if (data.type === 'results') {
-                      // Full results data (separate message)
-                      console.log(`📦 FRONTEND: Received full results for ${file.name}`, {
-                        type: data.type,
-                        resultsCount: data.results?.length
-                      })
-                      return {
-                        ...currentJob,
-                        results: data.results || currentJob.results
-                      }
-                    } else if (data.type === 'result') {
-                      // Individual result from batch processing
-                      console.log(`📄 FRONTEND: Received individual result for page ${data.result?.page_number} of ${file.name}`)
-                      
-                      // DEBUG: Log image data details
-                      const result = data.result
-                      if (result) {
-                        console.log(`🖼️ Page ${result.page_number} image debug:`)
-                        console.log(`   - has page_image property: ${!!result.page_image}`)
-                        console.log(`   - page_image type: ${typeof result.page_image}`)
-                        console.log(`   - page_image length: ${result.page_image ? result.page_image.length : 'N/A'}`)
-                        console.log(`   - page_image starts with data: ${result.page_image ? result.page_image.startsWith('data:') : 'N/A'}`)
-                        console.log(`   - page_image first 50 chars: ${result.page_image ? result.page_image.substring(0, 50) : 'N/A'}`)
-                        console.log(`   - Result object keys:`, Object.keys(result))
-                      }
-                      
+                      // Final completion message - TEXT PROCESSING DONE
                       const existingResults = currentJob.results || []
-                      const updatedResults = [...existingResults]
+                      console.log(`🎯 Text translation complete! ${existingResults.length} pages`)
                       
-                      // Check if this page already exists and update it, or add new
-                      const existingIndex = updatedResults.findIndex(r => r.page_number === data.result.page_number)
-                      if (existingIndex >= 0) {
-                        updatedResults[existingIndex] = data.result
-                      } else {
-                        updatedResults.push(data.result)
-                      }
-                      
-                      // Sort results by page number
-                      updatedResults.sort((a, b) => a.page_number - b.page_number)
-                      
-                      return {
+                      const completedJob = {
                         ...currentJob,
-                        results: updatedResults
+                        status: 'completed' as const,
+                        progress: 95, // 95% - waiting for images
+                        results: existingResults,
+                        metadata: data.metadata,
+                        statusMessage: `Text complete! Adding images...`
                       }
+                      
+                      // Now check if images are ready and merge them
+                      if (!imagesMerged) {
+                        console.log(`📸 Checking for client-side images...`)
+                        
+                        // Add a small delay to let any pending image processing finish
+                        setTimeout(() => {
+                          imageExtractionPromise.then(async (images: any[]) => {
+                            extractedImages = images || []
+                            console.log(`📸 Images extracted: ${extractedImages.length} images`)
+                            
+                            // Merge images with results
+                            const resultsWithImages = existingResults.map(result => {
+                              const pageImage = extractedImages.find(img => img.pageNumber === result.page_number)
+                              if (pageImage && pageImage.imageDataUrl) {
+                                return {
+                                  ...result,
+                                  page_image: pageImage.imageDataUrl
+                                }
+                              }
+                              return result
+                            })
+                            
+                            const imagesAdded = resultsWithImages.filter(r => r.page_image).length
+                            console.log(`✅ Images merged: ${imagesAdded}/${existingResults.length} pages have images`)
+                            
+                            // Update job with final results
+                            setJobs(prev => prev.map(j => 
+                              j.id === job.id 
+                                ? { 
+                                    ...j, 
+                                    results: resultsWithImages,
+                                    progress: 100,
+                                    statusMessage: `Complete! ${existingResults.length} pages translated${imagesAdded > 0 ? ` (${imagesAdded} with images)` : ' (text-only)'}`
+                                  }
+                                : j
+                            ))
+                            imagesMerged = true
+                          }).catch((imageError: any) => {
+                            // Check if image extraction was cancelled
+                            if (imageError instanceof Error && imageError.message.includes('cancelled')) {
+                              console.log('📸 Image extraction was cancelled - completing with text-only results')
+                              setJobs(prev => prev.map(j => 
+                                j.id === job.id 
+                                  ? { 
+                                      ...j, 
+                                      progress: 100,
+                                      statusMessage: `Complete! ${existingResults.length} pages translated (image extraction cancelled)`
+                                    }
+                                  : j
+                              ))
+                            } else {
+                              console.warn('Image extraction failed, keeping text-only results:', imageError)
+                              setJobs(prev => prev.map(j => 
+                                j.id === job.id 
+                                  ? { 
+                                      ...j, 
+                                      progress: 100,
+                                      statusMessage: `Complete! ${existingResults.length} pages translated (text-only)`
+                                    }
+                                  : j
+                              ))
+                            }
+                            imagesMerged = true
+                          })
+                        }, 100) // Small delay to allow image processing to sync up
+                      }
+                      
+                      return completedJob
                     } else if (data.type === 'error') {
                       // Error message
                       return {
@@ -375,58 +321,26 @@ export default function Home() {
                         statusMessage: `Error: ${data.error}`
                       }
                     } else {
-                      // Legacy format or progress update
-                      let currentPage = currentJob.currentPage
-                      let totalPages = currentJob.totalPages
-                      let statusMessage = data.message || `${data.status || currentJob.status} - ${data.progress || currentJob.progress}%`
+                      // Progress update
+                      const existingResults = currentJob.results || []
+                      const completedPages = existingResults.length
+                      const totalPages = data.total_pages || currentJob.totalPages || 1
                       
-                      // Extract page information from message
-                      if (data.message) {
-                        // Look for "Found X pages" pattern
-                        const foundPagesMatch = data.message.match(/Found (\d+) pages/i)
-                        if (foundPagesMatch) {
-                          totalPages = parseInt(foundPagesMatch[1])
-                          statusMessage = `Found ${totalPages} pages. Starting translation...`
-                        }
-                        
-                        // Look for "page X of Y" or "Processing page X" patterns
-                        const pageMatch = data.message.match(/(?:page|Processing page)\s+(\d+)(?:\s+of\s+(\d+))?/i)
-                        if (pageMatch) {
-                          currentPage = parseInt(pageMatch[1])
-                          if (pageMatch[2]) {
-                            totalPages = parseInt(pageMatch[2])
-                          }
-                          statusMessage = data.message
-                        }
-                        
-                        // Look for more specific status messages
-                        if (data.message.includes('Starting page')) {
-                          statusMessage = data.message
-                        } else if (data.message.includes('Translating page')) {
-                          statusMessage = data.message
-                        } else if (data.message.includes('Extracting image')) {
-                          statusMessage = data.message
-                        } else if (data.message.includes('complete')) {
-                          statusMessage = data.message
-                        }
-                      }
-                      
-                      // Better progress calculation for overall job
-                      let calculatedProgress = data.progress || currentJob.progress
-                      if (currentPage && totalPages && currentPage <= totalPages) {
-                        calculatedProgress = Math.min(95, Math.round((currentPage / totalPages) * 90) + 5)
+                      // Calculate progress based on completed pages, with fallback to data.progress
+                      let calculatedProgress = currentJob.progress || 0
+                      if (totalPages > 0 && completedPages > 0) {
+                        calculatedProgress = Math.min(90, Math.round((completedPages / totalPages) * 80) + 10)
                       }
                       
                       return { 
                         ...currentJob, 
                         status: data.status || currentJob.status,
-                        progress: Math.max(calculatedProgress, currentJob.progress), // Don't go backwards
-                        currentPage,
-                        totalPages,
+                        progress: Math.max(data.progress || calculatedProgress, currentJob.progress || 0),
+                        statusMessage: data.message || currentJob.statusMessage,
+                        totalPages: data.total_pages || currentJob.totalPages,
                         results: data.results || currentJob.results,
                         error: data.error,
-                        metadata: data.metadata || currentJob.metadata,
-                        statusMessage
+                        metadata: data.metadata || currentJob.metadata
                       }
                     }
                   }
@@ -458,6 +372,30 @@ export default function Home() {
                 // Try to extract any useful information from the malformed data
                 const jsonData = line.slice(6)
                 
+                // Check if this looks like a completion message that got cut off
+                if (jsonData.includes('"type":"complete"') || jsonData.includes('"progress":100')) {
+                  console.log('🎯 Detected completion message with parsing error - treating as successful completion')
+                  
+                  setJobs(prev => prev.map(currentJob => {
+                    if (currentJob.id === job.id) {
+                      // Mark as completed using existing results (they should already be there from individual callbacks)
+                      const existingResults = currentJob.results || []
+                      
+                      console.log(`✅ FRONTEND: Completing job with ${existingResults.length} existing results`)
+                      
+                      return {
+                        ...currentJob,
+                        status: 'completed' as const,
+                        progress: 100,
+                        statusMessage: `Translation complete! ${existingResults.length} pages processed.`
+                      }
+                    }
+                    return currentJob
+                  }))
+                  
+                  continue // Skip the rest of the error handling for this case
+                }
+                
                 // Check if it looks like a status update
                 if (jsonData.includes('"status"') && jsonData.includes('"progress"')) {
                   console.log('🔧 Attempting to recover status from malformed JSON...')
@@ -482,7 +420,7 @@ export default function Home() {
                           ...currentJob, 
                           status: recoveredData.status as any,
                           progress: recoveredData.progress,
-                          error: currentJob.error || 'Some pages may have transmission errors'
+                          statusMessage: recoveredData.message || currentJob.statusMessage
                         }
                       }
                       return currentJob
@@ -531,7 +469,8 @@ export default function Home() {
     if (job?.status === 'processing' || job?.status === 'uploading') {
       // Show confirmation for active translations
       const confirmed = window.confirm(
-        `This translation is currently ${job.status}. Are you sure you want to cancel it?`
+        `This translation is currently ${job.status}. Are you sure you want to cancel it?\n\n` +
+        `This will stop both text translation and image extraction.`
       )
       
       if (!confirmed) return
@@ -560,7 +499,7 @@ export default function Home() {
 
   const clearAllJobs = () => {
     const activeJobs = jobs.filter(job => 
-      job.status === 'processing' || job.status === 'uploading' || job.status === 'extracting-images'
+      job.status === 'processing' || job.status === 'uploading'
     )
     
     if (activeJobs.length > 0) {
@@ -585,6 +524,9 @@ export default function Home() {
     
     setJobs([])
   }
+
+  // Function to get the latest job states for components that need fresh data
+  const getAllJobs = () => jobs
 
   return (
     <div className="min-h-screen bg-primary-50 py-8">
@@ -632,9 +574,10 @@ export default function Home() {
               onChange={(e) => setUserTier(e.target.value)}
               className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-300 focus:border-primary-300"
             >
-              <option value="free">Free (20 pages, sequential)</option>
+              <option value="free">Free (50 pages, 5-page batches)</option>
               <option value="basic">Basic (100 pages, 20-page batches)</option>
-              <option value="pro">Pro (500 pages, 40-page batches)</option>
+              <option value="pro">Pro (500 pages, 50-page batches)</option>
+              <option value="business">Business (unlimited, 75-page batches)</option>
               <option value="enterprise">Enterprise (unlimited, 100-page batches)</option>
             </select>
             <p className="text-xs text-gray-500 mt-1">
@@ -661,19 +604,21 @@ export default function Home() {
                 </p>
                 <div className="text-sm text-gray-500 space-y-1">
                   <p>
-                    {userTier === 'free' && 'Free tier: 1 file, 20 pages max'}
+                    {userTier === 'free' && 'Free tier: 1 file, 50 pages max'}
                     {userTier === 'basic' && 'Basic tier: 2 files, 100 pages each'}
                     {userTier === 'pro' && 'Pro tier: 5 files, 500 pages each'}
+                    {userTier === 'business' && 'Business tier: 10 files, unlimited pages'}
                     {userTier === 'enterprise' && 'Enterprise tier: 10 files, unlimited pages'}
                   </p>
                   {(() => {
                     const activeJobs = jobs.filter(job => 
-                      job.status === 'uploading' || job.status === 'processing' || job.status === 'extracting-images'
+                      job.status === 'uploading' || job.status === 'processing'
                     ).length
                     const tierLimits = {
                       free: 1,
                       basic: 2,
                       pro: 5,
+                      business: 10,
                       enterprise: 10
                     }
                     const maxFiles = tierLimits[userTier as keyof typeof tierLimits] || 1
@@ -703,14 +648,27 @@ export default function Home() {
               <h2 className="text-xl font-semibold text-gray-900">
                 Translation Jobs ({jobs.length})
               </h2>
-              <div className="flex space-x-2">
-                <DownloadAllButton jobs={jobs} />
-                <button
-                  onClick={testPDFJS}
-                  className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-                >
-                  <span>Test PDF.js</span>
-                </button>
+              <div className="flex items-center space-x-4">
+                {/* Global PDF/HTML Toggle */}
+                <div className="flex items-center space-x-2 px-3 py-2 bg-gray-100 rounded-md">
+                  <span className={`text-sm ${globalDownloadFormat === 'pdf' ? 'font-semibold text-gray-900' : 'text-gray-500'}`}>
+                    PDF
+                  </span>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={globalDownloadFormat === 'html'}
+                      onChange={(e) => setGlobalDownloadFormat(e.target.checked ? 'html' : 'pdf')}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                  <span className={`text-sm ${globalDownloadFormat === 'html' ? 'font-semibold text-gray-900' : 'text-gray-500'}`}>
+                    HTML
+                  </span>
+                </div>
+                
+                <DownloadAllButton jobs={jobs} downloadFormat={globalDownloadFormat} />
                 <button
                   onClick={clearAllJobs}
                   className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
@@ -722,7 +680,7 @@ export default function Home() {
             </div>
 
             {jobs.map((job) => (
-              <JobItem key={job.id} job={job} onDelete={deleteJob} />
+              <JobItem key={job.id} job={job} onDelete={deleteJob} getAllJobs={getAllJobs} downloadFormat={globalDownloadFormat} />
             ))}
           </div>
         )}

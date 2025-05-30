@@ -34,9 +34,9 @@ export default function TranslationSettings({
   ]
 
   const tiers: { value: UserTier; label: string; description: string }[] = [
-    { value: 'free', label: 'Free', description: '20 pages max, sequential processing' },
-    { value: 'basic', label: 'Basic', description: '100 pages max, 20-page batches' },
-    { value: 'pro', label: 'Pro', description: '500 pages max, 40-page batches' },
+    { value: 'free', label: 'Free', description: '50 pages max, 2-page batches' },
+    { value: 'basic', label: 'Basic', description: '100 pages max, 4-page batches' },
+    { value: 'pro', label: 'Pro', description: '200 pages max, 6-page batches' },
     { value: 'enterprise', label: 'Enterprise', description: 'Unlimited pages, 100-page batches' }
   ]
 

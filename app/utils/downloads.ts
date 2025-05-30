@@ -1,274 +1,5 @@
 import { TranslationResult, TranslationJob } from '../types/translation'
-
-// HTML generation functions
-export function generateHTML(results: TranslationResult[], filename: string): string {
-  const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
-  
-  return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Translated: ${filename}</title>
-    <style>
-        body {
-            font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.6;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f8f5f0;
-            color: #333;
-        }
-        h1 {
-            text-align: center;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-        }
-        .page {
-            background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .page-number {
-            text-align: right;
-            color: #8D6E63;
-            font-size: 0.9em;
-            margin-bottom: 10px;
-        }
-        .translation {
-            white-space: pre-line;
-            font-size: 1.1em;
-        }
-        .notes {
-            font-style: italic;
-            color: #707070;
-            border-top: 1px dashed #ccc;
-            margin-top: 15px;
-            padding-top: 10px;
-        }
-        .character-name {
-            font-weight: bold;
-            color: #5D4037;
-        }
-        .stage-direction {
-            font-style: italic;
-            color: #6D4C41;
-        }
-    </style>
-</head>
-<body>
-    <h1>Translated: ${filename}</h1>
-    ${sortedResults.map(page => `
-    <div class="page">
-        <div class="page-number">Page ${page.page_number}</div>
-        <div class="translation">${formatTranslationText(page.translated_text)}</div>
-        ${page.notes ? `<div class="notes">${page.notes}</div>` : ''}
-    </div>
-    `).join('')}
-</body>
-</html>`
-}
-
-export function generateSideBySideHTML(results: TranslationResult[], filename: string): string {
-  const sortedResults = [...results].sort((a, b) => a.page_number - b.page_number)
-  
-  // DEBUG: Log each page's image status during HTML generation
-  console.log(`🖼️ DEBUG: Generating HTML for ${filename} with ${sortedResults.length} pages:`)
-  sortedResults.forEach(page => {
-    console.log(`   Page ${page.page_number}:`)
-    console.log(`     - has page_image: ${!!page.page_image}`)
-    console.log(`     - page_image type: ${typeof page.page_image}`)
-    console.log(`     - page_image length: ${page.page_image ? page.page_image.length : 'N/A'}`)
-    console.log(`     - condition (page.page_image && page.page_image.length > 0): ${page.page_image && page.page_image.length > 0}`)
-    console.log(`     - starts with data: ${page.page_image ? page.page_image.startsWith('data:') : 'N/A'}`)
-    
-    // DEBUG: Check for potential base64 corruption
-    if (page.page_image && page.page_image.length > 0) {
-      const base64Part = page.page_image.split(',')[1]
-      console.log(`     - base64 part length: ${base64Part ? base64Part.length : 'N/A'}`)
-      console.log(`     - base64 sample (first 100 chars): ${base64Part ? base64Part.substring(0, 100) : 'N/A'}`)
-      console.log(`     - base64 sample (last 50 chars): ${base64Part ? base64Part.slice(-50) : 'N/A'}`)
-      
-      // Check for invalid characters
-      const validBase64 = /^[A-Za-z0-9+/]*={0,2}$/.test(base64Part || '')
-      console.log(`     - valid base64 format: ${validBase64}`)
-      
-      // DEBUG: Try to actually load the image to see if it's valid
-      const testImg = new Image()
-      testImg.onload = () => {
-        console.log(`     ✅ Page ${page.page_number} image loaded successfully: ${testImg.width}x${testImg.height}`)
-      }
-      testImg.onerror = (error) => {
-        console.error(`     ❌ Page ${page.page_number} image failed to load:`, error)
-      }
-      testImg.src = page.page_image
-    }
-  })
-  
-  return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Side-by-Side: ${filename}</title>
-    <style>
-        body {
-            font-family: 'Bookerly', 'Georgia', serif;
-            line-height: 1.6;
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f8f5f0;
-            color: #333;
-        }
-        h1 {
-            text-align: center;
-            color: #5D4037;
-            border-bottom: 2px solid #8D6E63;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-        }
-        .page {
-            background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .page-number {
-            text-align: center;
-            color: #8D6E63;
-            font-size: 1.2em;
-            margin-bottom: 15px;
-            font-weight: bold;
-        }
-        .comparison {
-            display: flex;
-            gap: 20px;
-            align-items: flex-start;
-        }
-        .original {
-            flex: 1;
-            border-right: 1px solid #ddd;
-            padding-right: 20px;
-        }
-        .translation-container {
-            flex: 1;
-            padding-left: 20px;
-        }
-        .original-content {
-            background-color: #f9f9f9;
-            border: 1px solid #e0e0e0;
-            border-radius: 5px;
-            padding: 15px;
-            margin-bottom: 15px;
-        }
-        .original-text {
-            white-space: pre-line;
-            font-size: 0.95em;
-            color: #444;
-            margin-bottom: 15px;
-        }
-        .page-image {
-            max-width: 100%;
-            height: auto;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .translation {
-            white-space: pre-line;
-            font-size: 1.1em;
-            background-color: #f0f8ff;
-            border: 1px solid #b0d4ff;
-            border-radius: 5px;
-            padding: 15px;
-        }
-        .notes {
-            font-style: italic;
-            color: #707070;
-            border-top: 1px dashed #ccc;
-            margin-top: 15px;
-            padding-top: 10px;
-        }
-        .character-name {
-            font-weight: bold;
-            color: #5D4037;
-        }
-        .stage-direction {
-            font-style: italic;
-            color: #6D4C41;
-        }
-        .placeholder {
-            background-color: #f5f5f5;
-            border: 2px dashed #ccc;
-            padding: 40px;
-            text-align: center;
-            color: #666;
-        }
-        .section-title {
-            font-weight: bold;
-            color: #5D4037;
-            margin-bottom: 10px;
-            font-size: 1.1em;
-        }
-    </style>
-</head>
-<body>
-    <h1>Side-by-Side Translation: ${filename}</h1>
-    ${sortedResults.map(page => {
-      // DEBUG: Log the exact HTML being generated for each page
-      const imageHtml = page.page_image && page.page_image.length > 0 ? `
-                        <img src="${page.page_image.startsWith('data:') ? page.page_image : `data:image/png;base64,${page.page_image}`}" 
-                             alt="Page ${page.page_number} Image" 
-                             class="page-image" />
-                    ` : `
-                        <div class="placeholder">
-                            Original Page ${page.page_number}
-                            <br><small>(No image available)</small>
-                        </div>
-                    `
-      
-      console.log(`🔧 Page ${page.page_number} HTML snippet:`, imageHtml.substring(0, 200) + '...')
-      
-      return `
-    <div class="page">
-        <div class="page-number">Page ${page.page_number}</div>
-        <div class="comparison">
-            <div class="original">
-                <div class="section-title">Original Content</div>
-                <div class="original-content">
-                    ${page.original_text ? `
-                        <div class="original-text">${formatTranslationText(page.original_text)}</div>
-                    ` : ''}
-                    ${imageHtml}
-                </div>
-            </div>
-            <div class="translation-container">
-                <div class="section-title">Translation</div>
-                <div class="translation">${formatTranslationText(page.translated_text)}</div>
-                ${page.notes ? `<div class="notes">${page.notes}</div>` : ''}
-            </div>
-        </div>
-    </div>
-    `}).join('')}
-</body>
-</html>`
-}
-
-function formatTranslationText(text: string): string {
-  // Format dialogue and stage directions
-  let formatted = text
-    .replace(/([A-Za-z]+)(\s*\([^)]+\))?\n/g, '<span class="character-name">$1$2</span>\n')
-    .replace(/\(([^)]+)\)/g, '<span class="stage-direction">($1)</span>')
-  
-  return formatted
-}
+import { generateSideBySideHTML, generateHTML, formatTranslationText } from './htmlGenerators'
 
 // Download functions
 export const downloadHTML = (job: TranslationJob) => {
@@ -313,6 +44,50 @@ export const downloadPDF = async (job: TranslationJob) => {
   }
 }
 
+// Utility function to wait for images to be available
+export const waitForImages = (
+  job: TranslationJob, 
+  maxWaitTime: number = 10000,
+  getLatestJob?: () => TranslationJob
+): Promise<TranslationJob> => {
+  return new Promise((resolve, reject) => {
+    const startTime = Date.now()
+    let pollCount = 0
+    
+    const checkImages = () => {
+      pollCount++
+      
+      // Use the latest job state if available, otherwise use the passed job
+      const currentJob = getLatestJob ? getLatestJob() : job
+      const pagesWithImages = currentJob.results?.filter(r => r.page_image && r.page_image.length > 0).length || 0
+      const totalPages = currentJob.results?.length || 0
+      
+      console.log(`🕐 Waiting for images (attempt ${pollCount})... ${pagesWithImages}/${totalPages} pages have images`)
+      
+      // Success conditions:
+      // 1. Some images are available (at least 30% of pages have images)
+      // 2. Or we've waited long enough and have at least some images
+      // 3. Or we've hit the maximum wait time
+      const hasSignificantImages = pagesWithImages > 0 && (pagesWithImages / totalPages) >= 0.3
+      const hasAnyImages = pagesWithImages > 0
+      const hasWaitedReasonably = Date.now() - startTime > 3000 // 3 seconds minimum
+      const hasWaitedTooLong = Date.now() - startTime > maxWaitTime
+      
+      if (hasSignificantImages || (hasWaitedReasonably && hasAnyImages) || hasWaitedTooLong) {
+        const waitTime = ((Date.now() - startTime) / 1000).toFixed(1)
+        console.log(`✅ Done waiting for images after ${waitTime}s: ${pagesWithImages}/${totalPages} pages have images`)
+        resolve(currentJob) // Return the current job (which might be updated)
+      } else {
+        // Continue waiting, check more frequently initially, then less frequently
+        const delay = pollCount < 20 ? 150 : 500 // 150ms for first 3 seconds, then 500ms
+        setTimeout(checkImages, delay)
+      }
+    }
+    
+    checkImages()
+  })
+}
+
 export const viewSideBySide = (job: TranslationJob) => {
   if (!job.results) {
     console.error('No results available for side-by-side view')
@@ -321,6 +96,22 @@ export const viewSideBySide = (job: TranslationJob) => {
   }
   
   console.log('Opening side-by-side view for:', job.filename, 'with', job.results.length, 'pages')
+  
+  // DEBUG: Check image status when side-by-side is called
+  const pagesWithImages = job.results.filter(r => r.page_image && r.page_image.length > 0).length
+  console.log(`🖼️ DEBUG: Side-by-side called with ${pagesWithImages}/${job.results.length} pages having images`)
+  console.log(`🖼️ DEBUG: Sample page image status:`, {
+    page1: { 
+      hasImage: !!job.results[0]?.page_image,
+      imageLength: job.results[0]?.page_image?.length || 0,
+      imagePreview: job.results[0]?.page_image?.substring(0, 50) || 'none'
+    },
+    lastPage: {
+      hasImage: !!job.results[job.results.length-1]?.page_image,
+      imageLength: job.results[job.results.length-1]?.page_image?.length || 0,
+      imagePreview: job.results[job.results.length-1]?.page_image?.substring(0, 50) || 'none'
+    }
+  })
   
   try {
     // Open in new tab with side-by-side view
