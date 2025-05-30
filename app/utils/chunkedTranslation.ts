@@ -41,65 +41,89 @@ export async function processDocumentChunked(options: ChunkTranslationOptions): 
   
   const results: TranslationResult[] = []
   const concurrency = getConcurrencyForTier(userTier)
+  const maxParallelBatches = getMaxParallelBatches(userTier) // New: multiple batches in parallel
   
-  console.log(`⚡ Using concurrency level: ${concurrency} (${userTier} tier)`)
-  console.log(`🖼️ Processing images directly with Gemini's native image understanding`)
+  console.log(`⚡ Using concurrency level: ${concurrency} pages per batch (${userTier} tier)`)
+  console.log(`🚀 Running ${maxParallelBatches} batches in parallel for maximum speed`)
+  console.log(`🖼️ Processing images directly with Gemini's structured output (no commentary)`)
   
-  // Process pages in batches to respect concurrency limits
+  // Create all batches first
+  const allBatches: Array<{
+    batchIndex: number
+    pageIndices: number[]
+    startPage: number
+    endPage: number
+  }> = []
+  
   for (let i = 0; i < totalPages; i += concurrency) {
+    const batchEnd = Math.min(i + concurrency, totalPages)
+    const pageIndices = []
+    
+    for (let pageIndex = i; pageIndex < batchEnd; pageIndex++) {
+      const imageInfo = imageData[pageIndex]
+      if (imageInfo?.imageDataUrl) {
+        pageIndices.push(pageIndex)
+      }
+    }
+    
+    if (pageIndices.length > 0) {
+      allBatches.push({
+        batchIndex: Math.floor(i / concurrency),
+        pageIndices,
+        startPage: i + 1,
+        endPage: batchEnd
+      })
+    }
+  }
+  
+  console.log(`📦 Created ${allBatches.length} batches total, processing ${maxParallelBatches} at a time`)
+  
+  // Process batches in parallel groups
+  for (let batchGroupStart = 0; batchGroupStart < allBatches.length; batchGroupStart += maxParallelBatches) {
     if (signal?.aborted) {
       throw new Error('Processing was cancelled')
     }
     
-    const batch = []
-    const batchEnd = Math.min(i + concurrency, totalPages)
+    const batchGroup = allBatches.slice(batchGroupStart, batchGroupStart + maxParallelBatches)
+    console.log(`🏃‍♂️ Processing batch group ${Math.floor(batchGroupStart / maxParallelBatches) + 1}: batches ${batchGroup.map(b => b.batchIndex + 1).join(', ')}`)
     
-    console.log(`📦 Processing batch ${Math.floor(i / concurrency) + 1}: pages ${i + 1}-${batchEnd}`)
-    
-    // Create batch of translation promises
-    for (let pageIndex = i; pageIndex < batchEnd; pageIndex++) {
-      const imageInfo = imageData[pageIndex]
-      if (!imageInfo) {
-        console.log(`⚠️ No image data for page ${pageIndex + 1}`)
-        continue
-      }
+    // Process all batches in this group in parallel
+    const batchPromises = batchGroup.map(async (batch) => {
+      console.log(`📦 Starting batch ${batch.batchIndex + 1}: pages ${batch.startPage}-${batch.endPage}`)
       
-      const pageNum = imageInfo.pageNumber
-      const pageImage = imageInfo.imageDataUrl
-      
-      if (!pageImage) {
-        console.log(`⚠️ Skipping empty page ${pageNum}`)
-        continue
-      }
-      
-      const translationPromise = translateImageDirectly({
-        imageData: pageImage,
-        pageNumber: pageNum,
-        targetLanguage,
-        totalPages,
-        filename: file.name,
-        signal
+      // Process all pages in this batch
+      const pagePromises = batch.pageIndices.map(async (pageIndex) => {
+        const imageInfo = imageData[pageIndex]
+        const pageNum = imageInfo.pageNumber
+        
+        return translateImageDirectly({
+          imageData: imageInfo.imageDataUrl,
+          pageNumber: pageNum,
+          targetLanguage,
+          totalPages,
+          filename: file.name,
+          signal
+        })
       })
       
-      batch.push(translationPromise)
-    }
-    
-    // Wait for batch to complete
-    try {
-      const batchResults = await Promise.allSettled(batch)
+      // Wait for all pages in this batch
+      const batchResults = await Promise.allSettled(pagePromises)
       
-      for (let j = 0; j < batchResults.length; j++) {
-        const result = batchResults[j]
-        const imageInfo = imageData[i + j]
-        const pageNum = imageInfo?.pageNumber || (i + j + 1)
+      // Process results
+      const batchSuccesses: TranslationResult[] = []
+      const batchErrors: TranslationResult[] = []
+      
+      for (let i = 0; i < batchResults.length; i++) {
+        const result = batchResults[i]
+        const pageIndex = batch.pageIndices[i]
+        const imageInfo = imageData[pageIndex]
+        const pageNum = imageInfo.pageNumber
         
         if (result.status === 'fulfilled') {
-          results.push(result.value)
-          onPageComplete?.(result.value)
-          console.log(`✅ Completed page ${pageNum}/${totalPages}`)
+          batchSuccesses.push(result.value)
+          console.log(`✅ Batch ${batch.batchIndex + 1}: Completed page ${pageNum}/${totalPages}`)
         } else {
-          console.error(`❌ Failed page ${pageNum}:`, result.reason)
-          // Create error result
+          console.error(`❌ Batch ${batch.batchIndex + 1}: Failed page ${pageNum}:`, result.reason)
           const errorResult: TranslationResult = {
             page_number: pageNum,
             original_text: '[Image processing failed]',
@@ -107,24 +131,41 @@ export async function processDocumentChunked(options: ChunkTranslationOptions): 
             page_image: imageInfo?.imageDataUrl || '',
             notes: `Image translation failed: ${result.reason instanceof Error ? result.reason.message : 'Unknown error'}`
           }
-          results.push(errorResult)
-          onPageComplete?.(errorResult)
+          batchErrors.push(errorResult)
         }
       }
       
-      // Update progress
-      const completedPages = Math.min(batchEnd, totalPages)
+      console.log(`🎯 Batch ${batch.batchIndex + 1} complete: ${batchSuccesses.length} success, ${batchErrors.length} errors`)
+      return [...batchSuccesses, ...batchErrors]
+    })
+    
+    // Wait for all batches in this group to complete
+    try {
+      const groupResults = await Promise.all(batchPromises)
+      
+      // Flatten and add results
+      const groupFlattened = groupResults.flat()
+      results.push(...groupFlattened)
+      
+      // Update progress based on completed pages
+      const completedPages = results.length
       const progress = Math.round((completedPages / totalPages) * 85) + 15 // 15-100%
-      onProgress?.(progress, `Completed ${completedPages}/${totalPages} pages using Gemini image understanding`)
+      
+      // Notify about individual completions
+      groupFlattened.forEach(result => onPageComplete?.(result))
+      
+      onProgress?.(progress, `Completed ${completedPages}/${totalPages} pages using parallel processing (${batchGroup.length} batches in parallel)`)
+      
+      console.log(`🏁 Batch group complete: ${completedPages}/${totalPages} total pages processed`)
       
     } catch (error) {
-      console.error(`❌ Batch processing error:`, error)
+      console.error(`❌ Batch group processing error:`, error)
       throw error
     }
     
-    // Small delay between batches to avoid overwhelming the API
-    if (batchEnd < totalPages) {
-      await new Promise(resolve => setTimeout(resolve, 200))
+    // Small delay between batch groups to avoid overwhelming the API
+    if (batchGroupStart + maxParallelBatches < allBatches.length) {
+      await new Promise(resolve => setTimeout(resolve, 100))
     }
   }
   
@@ -186,6 +227,16 @@ function getConcurrencyForTier(userTier: UserTier): number {
     case 'basic': return 2
     case 'pro': return 3  // Slightly reduced for image processing
     case 'enterprise': return 4  // Reduced for image processing
+    default: return 1
+  }
+}
+
+function getMaxParallelBatches(userTier: UserTier): number {
+  switch (userTier) {
+    case 'free': return 1
+    case 'basic': return 2
+    case 'pro': return 3
+    case 'enterprise': return 4
     default: return 1
   }
 } 

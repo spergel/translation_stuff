@@ -13,25 +13,57 @@ interface ChunkTranslationRequest {
 
 export async function POST(request: NextRequest) {
   try {
-    const body: ChunkTranslationRequest = await request.json()
+    let body: ChunkTranslationRequest
+    
+    try {
+      body = await request.json()
+    } catch (parseError) {
+      console.error('❌ Failed to parse request body:', parseError)
+      return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 })
+    }
+    
     const { text, pageNumber, targetLanguage, imageData, totalPages, filename, imageOnly } = body
+
+    console.log(`🔍 API request received:`, {
+      pageNumber,
+      targetLanguage,
+      hasImageData: !!imageData,
+      textLength: text?.length || 0,
+      imageOnly,
+      filename: filename?.substring(0, 50) + '...'
+    })
 
     // For image-only processing, we need image data
     if (imageOnly && !imageData) {
+      console.error(`❌ Image-only processing requested but no image data provided for page ${pageNumber}`)
       return NextResponse.json({ error: 'Image data required for image-only processing' }, { status: 400 })
     }
 
+    // Validate image data format if provided
+    if (imageData && !imageData.startsWith('data:image/')) {
+      console.error(`❌ Invalid image data format for page ${pageNumber}. Expected data:image/ prefix`)
+      return NextResponse.json({ error: 'Invalid image data format. Expected base64 data URL' }, { status: 400 })
+    }
+
     // For text-based processing, we need text
-    if (!imageOnly && !text) {
+    if (!imageOnly && (!text || text.length === 0)) {
+      console.error(`❌ Text-based processing requested but no text provided for page ${pageNumber}`)
       return NextResponse.json({ error: 'Text required for text-based processing' }, { status: 400 })
     }
 
     if (!targetLanguage) {
+      console.error(`❌ No target language provided for page ${pageNumber}`)
       return NextResponse.json({ error: 'Target language is required' }, { status: 400 })
     }
 
+    if (!pageNumber || !totalPages || !filename) {
+      console.error(`❌ Missing required fields for page ${pageNumber}:`, { pageNumber, totalPages, filename })
+      return NextResponse.json({ error: 'Missing required fields: pageNumber, totalPages, or filename' }, { status: 400 })
+    }
+
+    console.log(`✅ Validation passed for page ${pageNumber}`)
     console.log(`🔤 Processing ${imageOnly ? 'image-only' : 'text+image'} chunk for page ${pageNumber}/${totalPages} of ${filename}`)
-    console.log(`📝 Text length: ${text.length} characters`)
+    console.log(`📝 Text length: ${text?.length || 0} characters`)
     console.log(`🖼️ Has image: ${!!imageData}`)
     console.log(`🎯 Mode: ${imageOnly ? 'Gemini native image understanding' : 'Traditional text+image'}`)
 
@@ -63,26 +95,9 @@ export async function POST(request: NextRequest) {
       }[targetLanguage] || 'the target language'
 
       parts.push({
-        text: `Please analyze this page image and perform the following tasks:
-
-1. **READ ALL TEXT**: Carefully examine the entire image and extract ALL visible text, including:
-   - Main content text
-   - Headers and titles
-   - Captions and footnotes
-   - Table contents
-   - Any small or subtle text
-   - Text in diagrams or charts
-
-2. **TRANSLATE EVERYTHING**: Translate all the extracted text to ${targetLangName}, while:
-   - Preserving the original structure and formatting
-   - Maintaining the meaning and context
-   - Keeping any special formatting (bold, italic, etc.)
-   - Preserving bullet points, numbering, and lists
-   - Maintaining technical terms appropriately
-
-3. **OUTPUT FORMAT**: Provide the translation in a clear, readable format that maintains the original document structure.
-
-This is page ${pageNumber} of ${totalPages} from "${filename}". Please be thorough and accurate in both text extraction and translation.`
+        text: `Extract ALL text from this image and translate it to ${targetLangName}. 
+               Be thorough in extraction and accurate in translation.
+               Page ${pageNumber} of ${totalPages} from "${filename}".`
       })
     } else {
       // Traditional text-based processing (fallback)
@@ -126,11 +141,39 @@ This is page ${pageNumber} of ${totalPages} from "${filename}". Please be thorou
         temperature: 0.1,
         topK: 1,
         topP: 0.1,
-        maxOutputTokens: 8192
+        maxOutputTokens: 8192,
+        // Force structured JSON output - no commentary!
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            extracted_text: {
+              type: "STRING",
+              description: "All text content extracted from the image, preserving original structure"
+            },
+            translated_text: {
+              type: "STRING", 
+              description: "Clean translation of the extracted text with no analysis or commentary"
+            },
+            page_info: {
+              type: "OBJECT",
+              properties: {
+                has_text: { type: "BOOLEAN" },
+                content_type: { 
+                  type: "STRING",
+                  enum: ["text", "image", "diagram", "table", "mixed"]
+                }
+              },
+              required: ["has_text", "content_type"]
+            }
+          },
+          required: ["extracted_text", "translated_text", "page_info"],
+          propertyOrdering: ["extracted_text", "translated_text", "page_info"]
+        }
       }
     }
 
-    console.log(`🌐 Making ${imageOnly ? 'image understanding' : 'translation'} request for page ${pageNumber}...`)
+    console.log(`🌐 Making ${imageOnly ? 'image understanding' : 'translation'} request for page ${pageNumber} with structured output...`)
     const startTime = Date.now()
 
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent?key=${process.env.GOOGLE_API_KEY}`, {
@@ -143,7 +186,7 @@ This is page ${pageNumber} of ${totalPages} from "${filename}". Please be thorou
     })
 
     const endTime = Date.now()
-    console.log(`📥 ${imageOnly ? 'Image processing' : 'Translation'} response for page ${pageNumber}: ${response.status} (${endTime - startTime}ms)`)
+    console.log(`📥 Structured ${imageOnly ? 'image processing' : 'translation'} response for page ${pageNumber}: ${response.status} (${endTime - startTime}ms)`)
 
     if (!response.ok) {
       const errorText = await response.text()
@@ -154,24 +197,42 @@ This is page ${pageNumber} of ${totalPages} from "${filename}". Please be thorou
     }
 
     const result = await response.json()
-    const translatedText = result.candidates?.[0]?.content?.parts?.[0]?.text?.trim()
+    const structuredResponse = result.candidates?.[0]?.content?.parts?.[0]?.text
 
-    if (!translatedText) {
-      console.error(`❌ No ${imageOnly ? 'image processing result' : 'translation'} received for page ${pageNumber}`)
+    if (!structuredResponse) {
+      console.error(`❌ No structured response received for page ${pageNumber}`)
       return NextResponse.json({ 
-        error: `No ${imageOnly ? 'image processing result' : 'translation'} received for page ${pageNumber}` 
+        error: `No structured response received for page ${pageNumber}` 
       }, { status: 500 })
     }
 
-    console.log(`✅ ${imageOnly ? 'Image processing' : 'Translation'} completed for page ${pageNumber} (${translatedText.length} chars)`)
+    // Parse the structured JSON response
+    let parsedResult
+    try {
+      parsedResult = JSON.parse(structuredResponse)
+    } catch (parseError) {
+      console.error(`❌ Failed to parse structured response for page ${pageNumber}:`, parseError)
+      return NextResponse.json({ 
+        error: `Failed to parse structured response for page ${pageNumber}` 
+      }, { status: 500 })
+    }
 
-    // Create translation result
+    const { extracted_text, translated_text, page_info } = parsedResult
+
+    console.log(`✅ Structured ${imageOnly ? 'image processing' : 'translation'} completed for page ${pageNumber}:`, {
+      extractedLength: extracted_text?.length || 0,
+      translatedLength: translated_text?.length || 0,
+      hasText: page_info?.has_text,
+      contentType: page_info?.content_type
+    })
+
+    // Create translation result with structured data
     const translationResult: TranslationResult = {
       page_number: pageNumber,
-      original_text: imageOnly ? '[Extracted from image]' : text,
-      translated_text: translatedText,
+      original_text: extracted_text || (imageOnly ? '[Extracted from image]' : text),
+      translated_text: translated_text || '[No translation available]',
       page_image: imageData || '',
-      notes: `${imageOnly ? 'Processed using Gemini native image understanding' : 'Translated'} from page ${pageNumber} of ${totalPages} (${endTime - startTime}ms)`
+      notes: `${imageOnly ? 'Processed using structured Gemini image understanding' : 'Translated with structured output'} (${endTime - startTime}ms) - Content: ${page_info?.content_type || 'unknown'}`
     }
 
     return NextResponse.json({ 
@@ -185,4 +246,4 @@ This is page ${pageNumber} of ${totalPages} from "${filename}". Please be thorou
       error: error instanceof Error ? error.message : 'Unknown translation error' 
     }, { status: 500 })
   }
-} 
+}
