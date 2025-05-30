@@ -233,10 +233,10 @@ function getConcurrencyForTier(userTier: UserTier): number {
 
 function getMaxParallelBatches(userTier: UserTier): number {
   switch (userTier) {
-    case 'free': return 1
-    case 'basic': return 2
-    case 'pro': return 3
-    case 'enterprise': return 4
-    default: return 1
+    case 'free': return 8        // 8 batches in parallel
+    case 'basic': return 8       // 8 batches in parallel  
+    case 'pro': return 12        // 12 batches in parallel
+    case 'enterprise': return 20 // 20 batches in parallel! 🚀
+    default: return 8
   }
 } 
