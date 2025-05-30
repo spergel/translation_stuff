@@ -108,7 +108,7 @@ export default function Home() {
           ...j, 
           status: 'processing', 
           progress: 5,
-          statusMessage: 'Starting chunked translation processing...'
+          statusMessage: 'Using Gemini native image understanding...'
         } : j))
         
         // Process document using chunked approach
@@ -131,20 +131,20 @@ export default function Home() {
           },
           signal: job.abortController?.signal
         })
-
-        // Calculate performance metrics
-        const endTime = Date.now()
-        const totalTime = Math.round((endTime - startTime) / 1000)
-        const pagesCount = results.length
-        const timePerPage = Math.round(totalTime / pagesCount * 10) / 10
         
+        // Calculate performance metrics
+                  const endTime = Date.now()
+                  const totalTime = Math.round((endTime - startTime) / 1000)
+        const pagesCount = results.length
+                  const timePerPage = Math.round(totalTime / pagesCount * 10) / 10
+                  
         console.log(`🎉 Chunked processing completed for ${file.name} in ${totalTime}s for ${pagesCount} pages (${timePerPage}s per page)`)
         
         // Update job to completed
         setJobs(prev => prev.map(j => j.id === job.id ? {
           ...j,
           status: 'completed',
-          progress: 100,
+                        progress: 100,
           results,
           totalPages: pagesCount,
           statusMessage: `Completed ${pagesCount} pages in ${totalTime}s (${timePerPage}s/page)`

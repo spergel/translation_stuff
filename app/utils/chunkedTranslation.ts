@@ -1,5 +1,5 @@
 import { TranslationResult, TargetLanguage, UserTier } from '../types/translation'
-import { extractTextFromPDF, extractImagesFromPDF } from './pdfUtils'
+import { extractImagesFromPDF } from './pdfUtils'
 
 interface ChunkTranslationOptions {
   file: File
@@ -13,15 +13,12 @@ interface ChunkTranslationOptions {
 export async function processDocumentChunked(options: ChunkTranslationOptions): Promise<TranslationResult[]> {
   const { file, targetLanguage, userTier, onProgress, onPageComplete, signal } = options
   
-  console.log(`🚀 Starting chunked processing for: ${file.name} (${Math.round(file.size / 1024 / 1024 * 100) / 100} MB)`)
+  console.log(`🚀 Starting image-based processing for: ${file.name} (${Math.round(file.size / 1024 / 1024 * 100) / 100} MB)`)
   
-  onProgress?.(5, 'Extracting text and images from PDF...')
+  onProgress?.(5, 'Extracting images from PDF for Gemini image understanding...')
   
-  // Process PDF entirely on client-side
-  const [textData, imageData] = await Promise.all([
-    extractTextFromPDF(file, { signal }),
-    extractImagesFromPDF(file, { signal })
-  ])
+  // Process PDF using only image extraction (since text extraction failed)
+  const imageData = await extractImagesFromPDF(file, { signal })
   
   if (signal?.aborted) {
     throw new Error('Processing was cancelled')
@@ -33,15 +30,20 @@ export async function processDocumentChunked(options: ChunkTranslationOptions): 
     imagesByPage[img.pageNumber] = img.imageDataUrl
   })
   
-  const totalPages = textData.pages.length
-  console.log(`📄 Extracted ${totalPages} pages of text and ${Object.keys(imagesByPage).length} images`)
+  const totalPages = imageData.length
+  console.log(`📸 Extracted ${totalPages} images for direct Gemini processing`)
   
-  onProgress?.(15, `Extracted content from ${totalPages} pages. Starting translation...`)
+  if (totalPages === 0) {
+    throw new Error('No images could be extracted from the PDF')
+  }
+  
+  onProgress?.(15, `Extracted ${totalPages} images. Starting direct image translation with Gemini...`)
   
   const results: TranslationResult[] = []
   const concurrency = getConcurrencyForTier(userTier)
   
   console.log(`⚡ Using concurrency level: ${concurrency} (${userTier} tier)`)
+  console.log(`🖼️ Processing images directly with Gemini's native image understanding`)
   
   // Process pages in batches to respect concurrency limits
   for (let i = 0; i < totalPages; i += concurrency) {
@@ -56,20 +58,24 @@ export async function processDocumentChunked(options: ChunkTranslationOptions): 
     
     // Create batch of translation promises
     for (let pageIndex = i; pageIndex < batchEnd; pageIndex++) {
-      const pageNum = pageIndex + 1
-      const pageText = textData.pages[pageIndex]?.text || ''
-      const pageImage = imagesByPage[pageNum] || ''
+      const imageInfo = imageData[pageIndex]
+      if (!imageInfo) {
+        console.log(`⚠️ No image data for page ${pageIndex + 1}`)
+        continue
+      }
       
-      if (!pageText.trim() && !pageImage) {
+      const pageNum = imageInfo.pageNumber
+      const pageImage = imageInfo.imageDataUrl
+      
+      if (!pageImage) {
         console.log(`⚠️ Skipping empty page ${pageNum}`)
         continue
       }
       
-      const translationPromise = translateSingleChunk({
-        text: pageText,
+      const translationPromise = translateImageDirectly({
+        imageData: pageImage,
         pageNumber: pageNum,
         targetLanguage,
-        imageData: pageImage,
         totalPages,
         filename: file.name,
         signal
@@ -84,7 +90,8 @@ export async function processDocumentChunked(options: ChunkTranslationOptions): 
       
       for (let j = 0; j < batchResults.length; j++) {
         const result = batchResults[j]
-        const pageNum = i + j + 1
+        const imageInfo = imageData[i + j]
+        const pageNum = imageInfo?.pageNumber || (i + j + 1)
         
         if (result.status === 'fulfilled') {
           results.push(result.value)
@@ -95,10 +102,10 @@ export async function processDocumentChunked(options: ChunkTranslationOptions): 
           // Create error result
           const errorResult: TranslationResult = {
             page_number: pageNum,
-            original_text: textData.pages[pageNum - 1]?.text || '',
+            original_text: '[Image processing failed]',
             translated_text: '[Translation failed]',
-            page_image: imagesByPage[pageNum] || '',
-            notes: `Translation failed: ${result.reason instanceof Error ? result.reason.message : 'Unknown error'}`
+            page_image: imageInfo?.imageDataUrl || '',
+            notes: `Image translation failed: ${result.reason instanceof Error ? result.reason.message : 'Unknown error'}`
           }
           results.push(errorResult)
           onPageComplete?.(errorResult)
@@ -108,7 +115,7 @@ export async function processDocumentChunked(options: ChunkTranslationOptions): 
       // Update progress
       const completedPages = Math.min(batchEnd, totalPages)
       const progress = Math.round((completedPages / totalPages) * 85) + 15 // 15-100%
-      onProgress?.(progress, `Completed ${completedPages}/${totalPages} pages`)
+      onProgress?.(progress, `Completed ${completedPages}/${totalPages} pages using Gemini image understanding`)
       
     } catch (error) {
       console.error(`❌ Batch processing error:`, error)
@@ -117,31 +124,30 @@ export async function processDocumentChunked(options: ChunkTranslationOptions): 
     
     // Small delay between batches to avoid overwhelming the API
     if (batchEnd < totalPages) {
-      await new Promise(resolve => setTimeout(resolve, 100))
+      await new Promise(resolve => setTimeout(resolve, 200))
     }
   }
   
   // Sort results by page number
   results.sort((a, b) => a.page_number - b.page_number)
   
-  onProgress?.(100, `Translation complete! Processed ${results.length} pages.`)
-  console.log(`🎉 Chunked processing completed: ${results.length} pages`)
+  onProgress?.(100, `Image translation complete! Processed ${results.length} pages using Gemini's native image understanding.`)
+  console.log(`🎉 Image-based processing completed: ${results.length} pages`)
   
   return results
 }
 
-async function translateSingleChunk(params: {
-  text: string
+async function translateImageDirectly(params: {
+  imageData: string
   pageNumber: number
   targetLanguage: TargetLanguage
-  imageData?: string
   totalPages: number
   filename: string
   signal?: AbortSignal
 }): Promise<TranslationResult> {
-  const { text, pageNumber, targetLanguage, imageData, totalPages, filename, signal } = params
+  const { imageData, pageNumber, targetLanguage, totalPages, filename, signal } = params
   
-  console.log(`🔤 Translating page ${pageNumber}/${totalPages}...`)
+  console.log(`🖼️ Processing image directly with Gemini for page ${pageNumber}/${totalPages}...`)
   
   const response = await fetch('/api/translate-chunk', {
     method: 'POST',
@@ -149,12 +155,13 @@ async function translateSingleChunk(params: {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      text,
+      text: '', // No pre-extracted text - let Gemini read the image
       pageNumber,
       targetLanguage,
       imageData,
       totalPages,
-      filename
+      filename,
+      imageOnly: true // Flag to indicate this is image-only processing
     }),
     signal
   })
@@ -177,8 +184,8 @@ function getConcurrencyForTier(userTier: UserTier): number {
   switch (userTier) {
     case 'free': return 1
     case 'basic': return 2
-    case 'pro': return 4
-    case 'enterprise': return 6
+    case 'pro': return 3  // Slightly reduced for image processing
+    case 'enterprise': return 4  // Reduced for image processing
     default: return 1
   }
 } 
