@@ -16,6 +16,8 @@ nixPkgs = [
   "giflib",          # GIF image format library
   "librsvg",         # SVG rendering library
   "nodejs",          # Node.js (includes npm)
+  "python3",         # Python 3 for node-gyp
+  "which"            # For `which python3` command
   # Sometimes development headers are in separate .dev or .lib packages in Nix
   # e.g., "cairo.dev", "pango.dev". For now, trying the base names.
 ]
@@ -27,11 +29,20 @@ nixPkgs = [
 # The following phases are often inferred correctly by Nixpacks for a Node.js project
 # with a package.json. You can uncomment and customize if needed.
 
-# [phases.install]
-# cmds = ["npm install --legacy-peer-deps"] # Added --legacy-peer-deps just in case, can remove if not needed
+[phases.install]
+# Debug: Check python availability and PATH before trying to install
+cmds = [
+  "echo 'Running diagnostic commands...'",
+  "which python3 || echo 'DEBUG: which python3 failed'",
+  "ls -la /usr/bin/python* /bin/python* || echo 'DEBUG: ls python* in common bins failed'",
+  "echo \"DEBUG: PATH is: $PATH\"",
+  "echo 'DEBUG: Full environment variables:' && env",
+  "echo 'Attempting npm install...'",
+  "npm install --python=\"$(which python3)\" --verbose"
+]
 
-# [phases.build]
-# cmds = ["npm run build"] # Assumes tsc compilation via `npm run build`
+[phases.build]
+cmds = ["npm run build"] # Assumes tsc compilation via `npm run build`
 
-# [start]
-# cmd = "npm run start" # Assumes `node dist/index.js` via `npm run start` 
+[start]
+cmd = "npm run start" # Assumes `node dist/index.js` via `npm run start` 

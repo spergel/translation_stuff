@@ -168,6 +168,15 @@ const worker = new Worker<
 
       console.log(`📄 PDF "${originalFilename}" has ${totalPages} pages.`);
       const allPageResults: TranslationResult[] = [];
+      let lastReportedProgress = -1; // Initialize with a value that ensures the first update (0%) is sent if applicable
+
+      // Ensure initial progress (0%) is reported if not already done by a previous job.updateProgress(0)
+      if (job.progress !== 0) { // Or a more robust check if job.progress might be undefined initially
+          await job.updateProgress(0);
+          lastReportedProgress = 0;
+      } else {
+          lastReportedProgress = 0; // Align if it was already 0
+      }
 
       for (let i = 1; i <= totalPages; i++) {
         const currentPageNumber = i;
@@ -351,7 +360,11 @@ const worker = new Worker<
 
         console.log(`   ✅ Page ${currentPageNumber}/${totalPages} processing completed for job ${job.id}. Notes: ${pageNotes}`);
         const progress = Math.round((currentPageNumber / totalPages) * 100);
-        await job.updateProgress(progress);
+        // Only update progress if it has changed
+        if (progress > lastReportedProgress && progress < 100) { // Avoid redundant 100% update here
+          await job.updateProgress(progress);
+          lastReportedProgress = progress;
+        }
       }
 
       // Clean up the worker's local temporary file after processing
@@ -366,7 +379,10 @@ const worker = new Worker<
       }
 
       console.log(`✅ PDF "${originalFilename}" (job ${job.id}) processing finished. ${allPageResults.length} pages handled.`);
-      await job.updateProgress(100);
+      // Ensure final 100% progress is always reported
+      if (lastReportedProgress < 100) {
+        await job.updateProgress(100);
+      }
       return allPageResults;
 
     } catch (error: any) {
@@ -404,8 +420,9 @@ worker.on('failed', (job, err) => {
 worker.on('progress', (job, progress) => {
   // Ensure progress is a number before performing arithmetic
   const numericProgress = Number(progress);
-  // Only log progress every 10% or when it's 0% or 100% to reduce noise
-  if (!isNaN(numericProgress) && (numericProgress % 10 === 0 || numericProgress === 0 || numericProgress === 100)) {
+  // Only log progress every 10% or when it's 0% or 100% to reduce noise, 
+  // or if it's a specific update like the first or last meaningful change.
+  if (!isNaN(numericProgress) && (numericProgress % 10 === 0 || numericProgress === 0 || numericProgress === 100 || numericProgress === 1)) {
     console.log(`📈 Job ${job.id} for "${job.data.file.name}" progress: ${numericProgress}%`);
   }
 });
