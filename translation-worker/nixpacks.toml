@@ -22,7 +22,12 @@ nixPkgs = [
   "freetype",        # Font rendering library
   "fontconfig",      # Font configuration and customization library
   "libpng",          # PNG image format library
-  "zlib"             # Data compression library
+  "zlib",            # Data compression library
+  "xorg.libX11",      # X11 library
+  "xorg.libXext",     # X11 extension library
+  "xorg.libXrender",  # X11 rendering library
+  "xorg.libXtst",     # X11 test library
+  "xorg.libXi"        # X11 input library
   # Sometimes development headers are in separate .dev or .lib packages in Nix
   # e.g., "cairo.dev", "pango.dev". For now, trying the base names.
 ]
@@ -37,15 +42,14 @@ nixPkgs = [
 [phases.install]
 # Debug: Check python availability and PATH before trying to install
 cmds = [
-  "echo 'Running diagnostic commands...'",
-  "which python3 || echo 'DEBUG: which python3 failed'",
-  "ls -la /usr/bin/python* /bin/python* || echo 'DEBUG: ls python* in common bins failed'",
-  "echo \"DEBUG: PATH is: $PATH\"",
-  "echo 'DEBUG: Full environment variables:' && env",
-  "echo 'Setting Python environment variables...'",
+  "echo 'Setting up build environment...'",
+  "export PKG_CONFIG_PATH=/nix/var/nix/profiles/default/lib/pkgconfig:/nix/var/nix/profiles/default/share/pkgconfig",
+  "export LD_LIBRARY_PATH=/nix/var/nix/profiles/default/lib",
   "export PYTHON=/root/.nix-profile/bin/python3",
   "export PYTHON_COMMAND_PATH=/root/.nix-profile/bin/python3",
-  "echo 'Attempting npm install...'",
+  "export npm_config_build_from_source=true",
+  "export npm_config_canvas_binary_host_mirror=https://registry.npmmirror.com/-/binary/canvas",
+  "echo 'Running npm install...'",
   "npm install --verbose"
 ]
 
