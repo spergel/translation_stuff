@@ -71,6 +71,25 @@ interface PdfTranslationJobData {
   userTier?: string; 
 }
 
+// Language mapping type
+type LanguageMap = {
+  [key: string]: string;
+};
+
+const languageMap: LanguageMap = {
+  'chinese': 'Traditional Chinese',
+  'english': 'English',
+  'japanese': 'Japanese',
+  'korean': 'Korean',
+  'spanish': 'Spanish',
+  'french': 'French',
+  'german': 'German',
+  'italian': 'Italian',
+  'portuguese': 'Portuguese',
+  'russian': 'Russian',
+  'arabic': 'Arabic'
+};
+
 // Helper: Render a PDF page to a PNG data URI using pdf-poppler and sharp
 async function renderPageToImage(pdfPath: string, pageNumber: number): Promise<string> {
   const outputDir = path.dirname(pdfPath);
@@ -217,12 +236,7 @@ const worker = new Worker<
         pageNotes += ` Mode: ${imageOnly ? 'Image-Only' : 'Text+Image'}.`;
         console.log(`   📄 Page ${currentPageNumber}: Extracted text length: ${originalPageText.length}, ${pageNotes}`);
 
-        const targetLangName = {
-          'chinese': 'Traditional Chinese', 'english': 'English', 'japanese': 'Japanese',
-          'korean': 'Korean', 'spanish': 'Spanish', 'french': 'French',
-          'german': 'German', 'italian': 'Italian', 'portuguese': 'Portuguese',
-          'russian': 'Russian', 'arabic': 'Arabic'
-        }[targetLanguage] || targetLanguage;
+        const targetLangName = languageMap[targetLanguage] || targetLanguage;
 
         let finalExtractedText = imageOnly ? "[Image text to be extracted by Gemini]" : originalPageText;
         let finalTranslatedText = "[Translation pending]";
