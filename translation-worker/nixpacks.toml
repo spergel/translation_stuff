@@ -37,8 +37,11 @@ cmds = [
   "ls -la /usr/bin/python* /bin/python* || echo 'DEBUG: ls python* in common bins failed'",
   "echo \"DEBUG: PATH is: $PATH\"",
   "echo 'DEBUG: Full environment variables:' && env",
+  "echo 'Setting Python environment variables...'",
+  "export PYTHON=/root/.nix-profile/bin/python3",
+  "export PYTHON_COMMAND_PATH=/root/.nix-profile/bin/python3",
   "echo 'Attempting npm install...'",
-  "npm install --python=\"$(which python3)\" --verbose"
+  "npm install --verbose"
 ]
 
 [phases.build]
