@@ -7,4 +7,9 @@ dist
 *.md
 .vscode
 coverage
-.DS_Store 
+.DS_Store
+*.log
+*.test.ts
+__tests__
+test
+tests 
