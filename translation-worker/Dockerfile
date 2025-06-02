@@ -13,8 +13,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies with specific flags
-RUN npm ci --only=production
+# Install dependencies and generate package-lock.json
+RUN npm install --omit=dev
 
 # Copy source
 COPY . .
