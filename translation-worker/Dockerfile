@@ -10,6 +10,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
+# Set environment variables for pdfjs-serverless
+ENV PDFJS_SERVERLESS_LEGACY=true
+ENV PDFJS_SERVERLESS_PLATFORM=node
+
 # Copy package files
 COPY package*.json ./
 
@@ -32,13 +36,15 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
+# Set environment variables
+ENV NODE_ENV=production
+ENV PDFJS_SERVERLESS_LEGACY=true
+ENV PDFJS_SERVERLESS_PLATFORM=node
+
 # Copy built files and production dependencies
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY package*.json ./
-
-# Set environment variables
-ENV NODE_ENV=production
 
 # Start the worker
 CMD ["node", "dist/index.js"] 
