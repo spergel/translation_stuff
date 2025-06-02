@@ -36,8 +36,8 @@ RUN npm install && \
 # Copy source
 COPY . .
 
-# Build TypeScript using npx
-RUN npx tsc
+# Build TypeScript using npm script
+RUN npm run build
 
 # Production stage
 FROM node:20-slim
