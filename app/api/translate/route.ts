@@ -3,6 +3,9 @@ import { Queue } from 'bullmq'
 import IORedis from 'ioredis'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/app/lib/auth'
+import { put } from '@vercel/blob';
+import fs from 'fs/promises'; // To read the temporary file
+import path from 'path'; // To construct a blob filename
 
 // Initialize serverless environment polyfills if they were for API route specific needs (e.g. if not using Vercel)
 // initializeServerlessEnvironment()
@@ -41,6 +44,9 @@ export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
     // Expect JSON body now instead of FormData
+    // This tempFilePath is assumed to be created by an earlier step or Vercel's runtime
+    // if this API route itself handles direct file uploads (e.g. from FormData).
+    // If so, you might need to adjust how 'fileBuffer' is obtained.
     const body = await req.json();
     const { tempFilePath, originalFilename, fileType, fileSize, targetLanguage } = body;
 
@@ -58,19 +64,49 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Get user tier from session, fallback to free for anonymous users
+    // --- Upload to Vercel Blob ---
+    let blobUrl = '';
+    try {
+      console.log(`Attempting to read file from tempFilePath for blob upload: ${tempFilePath}`);
+      const fileBuffer = await fs.readFile(tempFilePath);
+      // Sanitize filename for the blob path, and ensure it's unique enough or organized
+      const blobFilename = `pdf-uploads/${Date.now()}-${path.basename(originalFilename)}`;
+      
+      const blob = await put(blobFilename, fileBuffer, {
+        access: 'public', // Or 'private' if your worker can be authenticated
+        contentType: fileType,
+        // Add any cache control headers if necessary
+        // cacheControlMaxAge: 3600, 
+      });
+      blobUrl = blob.url;
+      console.log(`✅ File uploaded to Vercel Blob: ${blobUrl}`);
+
+      // Optionally, delete the local temporary file if it's no longer needed
+      // await fs.unlink(tempFilePath);
+      // console.log(`🗑️ Deleted local temporary file: ${tempFilePath}`);
+
+    } catch (uploadError: any) {
+      console.error('❌ API Route: Error uploading file to Vercel Blob:', uploadError);
+      return NextResponse.json(
+        { error: `Failed to store file for translation: ${uploadError.message}` },
+        { status: 500 }
+      );
+    }
+    // --- End Upload to Vercel Blob ---
+
     const userTier = (session?.user?.tier as string) || 'free'
     const userId = session?.user?.id
 
+    // REMOVED OLD PATH TRANSFORMATION LOGIC
+
     const jobName = `pdf-translate-${originalFilename.replace(/[^a-zA-Z0-9_.-]/g, '_')}`
     const jobData = {
-      file: { // Worker expects a 'file' object with these details
+      file: { 
         name: originalFilename,
         type: fileType,
-        size: fileSize,
-        // No buffer here anymore
+        size: fileSize, // This size is from the original upload, blob might have slightly different stored size.
       },
-      tempFilePath, // Pass the path to the temporary file
+      blobUrl: blobUrl, // Use the Vercel Blob URL
       targetLanguage,
       userId,
       userTier,
@@ -80,7 +116,8 @@ export async function POST(req: NextRequest) {
       // Optional: configure retries
     })
 
-    console.log(`✅ Job ${job.id} (name: ${jobName}) for PDF "${originalFilename}" (from ${tempFilePath}) enqueued by user ${userId || 'anonymous'}.`)
+    // Log the original tempFilePath for context, but worker will use blobUrl
+    console.log(`✅ Job ${job.id} (name: ${jobName}) for PDF "${originalFilename}" (using blob URL: ${blobUrl}, original temp path: ${tempFilePath}) enqueued by user ${userId || 'anonymous'}.`)
 
     return NextResponse.json({
       message: `Translation job for "${originalFilename}" has been queued successfully.`,

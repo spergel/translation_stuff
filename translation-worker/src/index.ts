@@ -3,6 +3,10 @@ import { Redis } from 'ioredis';
 import dotenv from 'dotenv';
 import { initializeWorkerEnvironment } from './worker-polyfills.js';
 import fs from 'fs';
+import fsp from 'fs/promises'; // For async file operations if needed, and for unlink
+import path from 'path'; // For joining paths for the new temp file
+import { Readable } from 'stream'; // For converting fetch response to stream
+import { finished } from 'stream/promises'; // For awaiting stream completion
 
 // Cast pdfjs-serverless import to any to bypass type checking for this module
 import * as PdfJsLibUntyped from 'pdfjs-serverless';
@@ -61,7 +65,7 @@ interface PdfTranslationJobData {
     type: string; 
     size: number;
   };
-  tempFilePath: string;
+  blobUrl: string; // <<< New: URL of the file in Vercel Blob
   targetLanguage: string;
   userId?: string;
   userTier?: string; 
@@ -120,59 +124,49 @@ const worker = new Worker<
 >(
   QUEUE_NAME,
   async (job: Job<PdfTranslationJobData, TranslationResult[]>) => {
-    const { file, tempFilePath, targetLanguage, userId, userTier } = job.data;
-    const { name: filename } = file;
+    const { file, blobUrl, targetLanguage, userId, userTier } = job.data;
+    const { name: originalFilename } = file;
 
     // Determine Gemini Model based on User Tier
     const geminiModel = userTier === 'pro' ? 'gemini-2.0-flash' : 'gemini-1.5-flash-8b';
-    console.log(`🚀 Processing PDF translation job ${job.id}: "${filename}" from path "${tempFilePath}" for user ${userId || 'anonymous'} (Tier: ${userTier || 'default'}, Model: ${geminiModel})`);
+    
+    // --- Download file from Vercel Blob to a local temp path for the worker ---
+    // Create a unique local temporary path for the worker
+    const workerTempDir = '/tmp/worker-pdfs'; // Worker's internal temp directory
+    await fsp.mkdir(workerTempDir, { recursive: true }); // Ensure directory exists
+    const workerTempFilePath = path.join(workerTempDir, `${job.id}-${path.basename(originalFilename)}`);
+    let downloadSuccess = false;
 
+    console.log(`🚀 Processing PDF translation job ${job.id}: "${originalFilename}" (from Blob URL: ${blobUrl}) for user ${userId || 'anonymous'} (Tier: ${userTier || 'default'}, Model: ${geminiModel})`);
+    
     try {
+      console.log(`⬇️ Worker job ${job.id}: Downloading from ${blobUrl} to ${workerTempFilePath}...`);
+      const response = await fetch(blobUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to download file from Vercel Blob: ${response.status} ${response.statusText}. URL: ${blobUrl}`);
+      }
+      if (!response.body) {
+        throw new Error('Response body is null when downloading from Vercel Blob.');
+      }
+      // Stream the download to the file
+      const fileStream = fs.createWriteStream(workerTempFilePath);
+      // Type assertion for response.body as ReadableStream is often needed for Node.js fetch
+      await finished(Readable.fromWeb(response.body as import('stream/web').ReadableStream).pipe(fileStream));
+      downloadSuccess = true;
+      console.log(`✅ Worker job ${job.id}: Successfully downloaded to ${workerTempFilePath}`);
+      // --- End Download ---  
+      
       await job.updateProgress(0);
 
-      // --- BEGIN DIAGNOSTIC LOGGING ---
-      console.log(`📄 Worker job ${job.id}: Received tempFilePath: "${tempFilePath}"`);
-      try {
-        const fileExists = fs.existsSync(tempFilePath);
-        console.log(`📄 Worker job ${job.id}: Does file exist at "${tempFilePath}"? ${fileExists}`);
-        if (!fileExists) {
-          console.log(`📄 Worker job ${job.id}: Current working directory: ${process.cwd()}`);
-          if (!tempFilePath.startsWith('/') && !tempFilePath.match(/^[a-zA-Z]:\\/)) { // crude check for absolute path
-            const commonTempDirs = ['/tmp', '/temp', '.'];
-            for (const dir of commonTempDirs) {
-              try {
-                const files = fs.readdirSync(dir);
-                console.log(`📄 Worker job ${job.id}: Listing files in "${dir}":`, files.slice(0, 10)); // Log first 10 files
-              } catch (e: any) {
-                console.log(`📄 Worker job ${job.id}: Could not list files in "${dir}": ${e.message}`);
-              }
-            }
-          }
-          const lastSeparatorIndex = Math.max(tempFilePath.lastIndexOf('/'), tempFilePath.lastIndexOf('\\'));
-          if (lastSeparatorIndex > 0) {
-            const dirOfTempFile = tempFilePath.substring(0, lastSeparatorIndex);
-            try {
-              const dirContents = fs.readdirSync(dirOfTempFile);
-              console.log(`📄 Worker job ${job.id}: Contents of directory "${dirOfTempFile}":`, dirContents.slice(0,10));
-            } catch (e: any) {
-              console.warn(`⚠️ Worker job ${job.id}: Could not list directory of temp file "${dirOfTempFile}": ${e.message}`);
-            }
-          }
-        }
-      } catch (e: any) {
-        console.error(`❌ Worker job ${job.id}: Error checking file existence for "${tempFilePath}": ${e.message}`, e.stack);
-      }
-      // --- END DIAGNOSTIC LOGGING ---
-
-      // Read the file from the temporary path
-      const pdfBuffer = fs.readFileSync(tempFilePath);
+      // Read the file from the worker's new local temporary path
+      const pdfBuffer = fs.readFileSync(workerTempFilePath);
       // Convert Node.js Buffer to Uint8Array for pdfjs-serverless
       const pdfUint8Array = new Uint8Array(pdfBuffer.buffer, pdfBuffer.byteOffset, pdfBuffer.byteLength);
       
       const pdfDocument: any /* PDFDocumentProxy */ = await PdfJsLib.getDocument({ data: pdfUint8Array, useSystemFonts: true }).promise;
       const totalPages = pdfDocument.numPages;
 
-      console.log(`📄 PDF "${filename}" has ${totalPages} pages.`);
+      console.log(`📄 PDF "${originalFilename}" has ${totalPages} pages.`);
       const allPageResults: TranslationResult[] = [];
 
       for (let i = 1; i <= totalPages; i++) {
@@ -180,9 +174,9 @@ const worker = new Worker<
         let pageNotes = `Model: ${geminiModel}.`; // Start with model info
         let processingStartTime = Date.now();
 
-        console.log(`📄 Processing page ${currentPageNumber}/${totalPages} of "${filename}" for job ${job.id}`);
+        console.log(`📄 Processing page ${currentPageNumber}/${totalPages} of "${originalFilename}" for job ${job.id}`);
         if (!(await job.isActive())) {
-          console.warn(`⚠️ Job ${job.id} was cancelled. Stopping processing for "${filename}".`);
+          console.warn(`⚠️ Job ${job.id} was cancelled. Stopping processing for "${originalFilename}".`);
           throw new Error('Job cancelled by user');
         }
 
@@ -216,10 +210,10 @@ const worker = new Worker<
         const combinedPromptParts: any[] = [];
         if (imageOnly) {
           combinedPromptParts.push({ inlineData: { mimeType: "image/png", data: pageImageBase64.split(',')[1] } });
-          combinedPromptParts.push({ text: `Extract ALL text from this image and translate it to ${targetLangName}. Be thorough. This is Page ${currentPageNumber} of ${totalPages} from document titled "${filename}".` });
+          combinedPromptParts.push({ text: `Extract ALL text from this image and translate it to ${targetLangName}. Be thorough. This is Page ${currentPageNumber} of ${totalPages} from document titled "${originalFilename}".` });
         } else {
           combinedPromptParts.push({ inlineData: { mimeType: "image/png", data: pageImageBase64.split(',')[1] } });
-          combinedPromptParts.push({ text: `Review page ${currentPageNumber} of ${totalPages} from document "${filename}". First, extract all original text. Second, translate that extracted text to ${targetLangName}. Original text to process if clear: ###${originalPageText}###` });
+          combinedPromptParts.push({ text: `Review page ${currentPageNumber} of ${totalPages} from document "${originalFilename}". First, extract all original text. Second, translate that extracted text to ${targetLangName}. Original text to process if clear: ###${originalPageText}###` });
         }
 
         const combinedRequestBody = {
@@ -266,7 +260,7 @@ const worker = new Worker<
 
           // Step 1: Extract Text Only
           const extractParts: any[] = [{ inlineData: { mimeType: "image/png", data: pageImageBase64.split(',')[1] } }];
-          extractParts.push({ text: `Extract ALL text content from this image (page ${currentPageNumber}/${totalPages} of document "${filename}"). Provide only the extracted text.` });
+          extractParts.push({ text: `Extract ALL text content from this image (page ${currentPageNumber}/${totalPages} of document "${originalFilename}"). Provide only the extracted text.` });
           
           const extractRequestBody = {
             contents: [{ parts: extractParts }],
@@ -360,28 +354,30 @@ const worker = new Worker<
         await job.updateProgress(progress);
       }
 
-      // Clean up the temporary file after processing
-      fs.unlink(tempFilePath, (err) => {
-        if (err) {
-          console.warn(`⚠️ Failed to delete temporary file ${tempFilePath} for job ${job.id}:`, err);
-        } else {
-          console.log(`🗑️ Deleted temporary file ${tempFilePath} for job ${job.id}`);
-        }
-      });
+      // Clean up the worker's local temporary file after processing
+      if (downloadSuccess) { // Only attempt to unlink if download was successful and file was created
+        fs.unlink(workerTempFilePath, (err) => { // <<< Use workerTempFilePath
+          if (err) {
+            console.warn(`⚠️ Failed to delete worker's temporary file ${workerTempFilePath} for job ${job.id}:`, err);
+          } else {
+            console.log(`🗑️ Deleted worker's temporary file ${workerTempFilePath} for job ${job.id}`);
+          }
+        });
+      }
 
-      console.log(`✅ PDF "${filename}" (job ${job.id}) processing finished. ${allPageResults.length} pages handled.`);
+      console.log(`✅ PDF "${originalFilename}" (job ${job.id}) processing finished. ${allPageResults.length} pages handled.`);
       await job.updateProgress(100);
       return allPageResults;
 
     } catch (error: any) {
-      console.error(`❌❌ Overall PDF translation job ${job.id} ("${filename}") failed catastrophically:`, error.message, error.stack);
+      console.error(`❌❌ Overall PDF translation job ${job.id} ("${originalFilename}") failed catastrophically:`, error.message, error.stack);
       const finalErrorMessage = error.message || 'Worker job for PDF failed with an unhandled error';
       await job.updateProgress(job.progress || 0); 
-      // Also attempt to delete the temp file on catastrophic failure
-      if (fs.existsSync(tempFilePath)) {
-        fs.unlink(tempFilePath, (unlinkErr) => {
-          if (unlinkErr) console.warn(`⚠️ Failed to delete temp file ${tempFilePath} during error handling:`, unlinkErr);
-          else console.log(`🗑️ Deleted temp file ${tempFilePath} during error handling.`);
+      // Also attempt to delete the worker's local temp file on catastrophic failure
+      if (downloadSuccess && fs.existsSync(workerTempFilePath)) { // <<< Use workerTempFilePath
+        fs.unlink(workerTempFilePath, (unlinkErr) => {
+          if (unlinkErr) console.warn(`⚠️ Failed to delete worker's temp file ${workerTempFilePath} during error handling:`, unlinkErr);
+          else console.log(`🗑️ Deleted worker's temp file ${workerTempFilePath} during error handling.`);
         });
       }
       await job.moveToFailed(new Error(finalErrorMessage), 'worker-error-queue', true);
