@@ -19,13 +19,14 @@ ENV NODE_ENV=production
 COPY package*.json ./
 
 # Install ALL dependencies (including dev) for building
-RUN npm install
+RUN npm install && \
+    npm install -g typescript
 
 # Copy source
 COPY . .
 
 # Build TypeScript
-RUN npm run build
+RUN tsc
 
 # Production stage
 FROM node:20-slim
