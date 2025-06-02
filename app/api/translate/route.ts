@@ -218,7 +218,7 @@ export async function DELETE(req: NextRequest) {
     console.error('❌ API Route (DELETE): Translation queue is not initialized.')
     return NextResponse.json({ error: 'Cannot cancel job, service unavailable.' }, { status: 503 })
   }
-            try {
+  try {
     const { searchParams } = new URL(req.url)
     const jobId = searchParams.get('jobId')
 
@@ -232,28 +232,45 @@ export async function DELETE(req: NextRequest) {
     }
 
     const state = await job.getState()
+    const isActive = state === 'active';
+    const isWaiting = state === 'waiting' || state === 'delayed' || state === 'paused'; // Paused jobs can also be removed
+
     if (state === 'completed' || state === 'failed' || state === 'cancelled') {
-      return NextResponse.json({ error: `Job is already ${state}, cannot cancel.` }, { status: 409 }) // 409 Conflict
+      return NextResponse.json({ message: `Job is already ${state}, cannot cancel.`, status: state }, { status: 409 }); // 409 Conflict
     }
 
-    // Attempt to remove the job if it's active or waiting
-    // Forcibly remove if it's stuck (use with caution for active jobs)
-    if (job.remove && (state === 'active' || state === 'waiting' || state === 'delayed')) {
-      await job.remove() //This will also try to move the job to failed with a JobCancellation error if it's active.
-      console.log(`🗑️ API Route (DELETE): Job ${jobId} removed (or cancellation initiated).`)
-      return NextResponse.json({ jobId, status: 'cancelled' })
-    } else if (job.moveToFailed && state === 'active') { // If remove is not available or to be more graceful with active jobs
-      await job.moveToFailed(new Error('Job cancelled by user via API'), 'user-cancelled', true)
-      console.log(`🚫 API Route (DELETE): Job ${jobId} marked as failed (cancelled by user).`)
-      return NextResponse.json({ jobId, status: 'cancelled' })
+    if (isWaiting) {
+      try {
+        await job.remove();
+        console.log(`🗑️ API Route (DELETE): Waiting/Delayed/Paused Job ${jobId} removed successfully.`);
+        return NextResponse.json({ jobId, status: 'cancelled', message: 'Job was waiting and has been removed.' });
+      } catch (removeError: any) {
+        console.error(`❌ API Route (DELETE): Error removing waiting/delayed job ${jobId}:`, removeError.message);
+        // If remove failed for some unexpected reason, try to mark as failed.
+        await job.moveToFailed(new Error('Job cancellation attempted (was waiting, remove failed). User: ' + (await getServerSession(authOptions))?.user?.id), 'cancelled-by-user-admin-failure');
+        return NextResponse.json({ error: `Job was waiting but could not be removed directly. Marked as failed: ${removeError.message}` }, { status: 500 });
+      }
+    } else if (isActive) {
+      // For active jobs, attempting to move to failed with a specific reason is usually safer
+      // than forceful removal, as the worker can pick up the isActive() check.
+      try {
+        await job.moveToFailed(new Error('Job cancelled by user via API while active.'), 'cancelled-by-user-active', false); // false for keepJobs
+        console.log(`🚫 API Route (DELETE): Active Job ${jobId} marked as failed (cancelled by user). Worker should stop processing.`);
+        return NextResponse.json({ jobId, status: 'cancelling', message: 'Job is active. Cancellation requested. Worker will attempt to stop.' });
+      } catch (moveToFailedError: any) {
+        console.error(`❌ API Route (DELETE): Error marking active job ${jobId} as failed:`, moveToFailedError.message);
+        // This can happen if the job is locked and moveToFailed also has issues, though less common than remove().
+        return NextResponse.json({ error: `Job is active and could not be marked as cancelled: ${moveToFailedError.message}. It might be locked.` }, { status: 500 });
+      }
     } else {
-      console.warn(`⚠️ API Route (DELETE): Job ${jobId} in state ${state} could not be directly removed or marked failed as cancelled.`)
-      return NextResponse.json({ error: `Job in state ${state} could not be cancelled through this action.` }, { status: 400 })
+      // Should ideally not reach here if previous state checks are comprehensive
+      console.warn(`⚠️ API Route (DELETE): Job ${jobId} in state ${state} - no standard cancellation path taken.`);
+      return NextResponse.json({ error: `Job in state ${state} could not be cancelled through standard actions.` }, { status: 400 });
     }
 
   } catch (error: any) {
-    console.error('❌ API Route (DELETE): Error cancelling job:', error)
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error.'
-    return NextResponse.json({ error: `Failed to cancel job: ${errorMessage}` }, { status: 500 })
+    console.error('❌ API Route (DELETE): General error cancelling job:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error.';
+    return NextResponse.json({ error: `Failed to process cancellation request: ${errorMessage}` }, { status: 500 });
   }
 }

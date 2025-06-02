@@ -1,15 +1,36 @@
 # nixpacks.toml (in your translation-worker directory)
 
-# System packages to install
-# These are common dependencies for node-canvas on Debian/Ubuntu
-aptPkgs = ["build-essential", "libcairo2-dev", "libpango1.0-dev", "libjpeg-dev", "libgif-dev", "librsvg2-dev"]
+[phases.setup]
+# Attempting to install common build tools and some graphics libraries via Nix packages.
+# Exact Nix package names for canvas dependencies can be specific.
+# Start with build essentials and common tools.
+# Common Nix package names that might provide C/C++ build toolchain and canvas dependencies.
+# If these specific names aren't found, the Nixpacks build log should indicate it.
+nixPkgs = [
+  "gcc",             # GNU Compiler Collection (for C/C++)
+  "gnumake",         # make utility
+  "pkg-config",      # Helper tool used when compiling applications and libraries
+  "cairo",           # Graphics library
+  "pango",           # Library for layout and rendering of text
+  "libjpeg",         # JPEG image compression library
+  "giflib",          # GIF image format library
+  "librsvg",         # SVG rendering library
+  # Sometimes development headers are in separate .dev or .lib packages in Nix
+  # e.g., "cairo.dev", "pango.dev". For now, trying the base names.
+]
 
-# If you want to customize phases (optional, Nixpacks usually infers these well)
+# The top-level aptPkgs might not be the preferred way for Railway's Nixpacks if [phases.setup].nixPkgs is used.
+# Commenting out to avoid conflict and focus on the nixPkgs approach first.
+# aptPkgs = ["build-essential", "libcairo2-dev", "libpango1.0-dev", "libjpeg-dev", "libgif-dev", "librsvg2-dev"]
+
+# The following phases are often inferred correctly by Nixpacks for a Node.js project
+# with a package.json. You can uncomment and customize if needed.
+
 # [phases.install]
-# cmds = ["npm install"] # Default is usually fine
+# cmds = ["npm install --legacy-peer-deps"] # Added --legacy-peer-deps just in case, can remove if not needed
 
 # [phases.build]
-# cmds = ["npm run build"] # Default is usually fine
+# cmds = ["npm run build"] # Assumes tsc compilation via `npm run build`
 
 # [start]
-# cmd = "npm run start" # Default is usually fine 
+# cmd = "npm run start" # Assumes `node dist/index.js` via `npm run start` 
