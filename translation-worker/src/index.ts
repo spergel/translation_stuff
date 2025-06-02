@@ -155,6 +155,15 @@ function tryParseJSON(jsonString: string | undefined, pageNumber: number, job_id
   }
 }
 
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('UNHANDLED REJECTION:', reason);
+  process.exit(1);
+});
+
 // Create worker
 const worker = new Worker<
   PdfTranslationJobData,      
