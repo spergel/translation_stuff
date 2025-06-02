@@ -27,9 +27,9 @@ export interface TranslationMetadata {
 export interface TranslationJob {
   id: string
   filename: string
-  status: 'uploading' | 'processing' | 'completed' | 'error' | 'cancelled' | 'queued'
+  status: 'queued' | 'uploading' | 'processing' | 'completed' | 'error' | 'cancelled'
   progress: number
-  originalFile?: File
+  originalFile: File
   results?: TranslationResult[]
   error?: string
   currentPage?: number
@@ -39,6 +39,8 @@ export interface TranslationJob {
   statusMessage?: string
   documentId?: string
   queueJobId?: string
+  translatedPdfUrl?: string
+  translatedHtmlUrl?: string
 }
 
 export type UserTier = 'free' | 'basic' | 'pro' | 'enterprise'

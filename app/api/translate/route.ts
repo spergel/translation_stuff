@@ -40,18 +40,18 @@ export async function POST(req: NextRequest) {
 
   try {
     const session = await getServerSession(authOptions)
-    const formData = await req.formData()
-    const file = formData.get('file') as File
-    const targetLanguage = formData.get('targetLanguage') as string
+    // Expect JSON body now instead of FormData
+    const body = await req.json();
+    const { tempFilePath, originalFilename, fileType, fileSize, targetLanguage } = body;
 
-    if (!file || !targetLanguage) {
+    if (!tempFilePath || !originalFilename || !fileType || fileSize === undefined || !targetLanguage) {
       return NextResponse.json(
-        { error: 'File and target language are required' },
+        { error: 'Missing required fields: tempFilePath, originalFilename, fileType, fileSize, targetLanguage' },
         { status: 400 }
       )
     }
 
-    if (file.type !== 'application/pdf') {
+    if (fileType !== 'application/pdf') {
       return NextResponse.json(
         { error: 'Invalid file type. Only PDF files are accepted.' },
         { status: 400 }
@@ -62,35 +62,31 @@ export async function POST(req: NextRequest) {
     const userTier = (session?.user?.tier as string) || 'free'
     const userId = session?.user?.id
 
-    const arrayBuffer = await file.arrayBuffer()
-    const buffer = Buffer.from(arrayBuffer)
-    const base64Pdf = buffer.toString('base64')
-
-    const jobName = `pdf-translate-${file.name.replace(/[^a-zA-Z0-9_.-]/g, '_')}`
+    const jobName = `pdf-translate-${originalFilename.replace(/[^a-zA-Z0-9_.-]/g, '_')}`
     const jobData = {
-      file: {
-        name: file.name,
-        type: file.type,
-        size: file.size,
-        buffer: base64Pdf // Send base64 encoded PDF to worker
+      file: { // Worker expects a 'file' object with these details
+        name: originalFilename,
+        type: fileType,
+        size: fileSize,
+        // No buffer here anymore
       },
+      tempFilePath, // Pass the path to the temporary file
       targetLanguage,
       userId,
       userTier,
     }
 
     const job = await translationQueue.add(jobName, jobData, {
-      // attempts: 3, // Optional: configure retries at the queue level if desired
-      // backoff: { type: 'exponential', delay: 5000 }
+      // Optional: configure retries
     })
 
-    console.log(`✅ Job ${job.id} (name: ${jobName}) for PDF "${file.name}" enqueued by user ${userId || 'anonymous'}.`)
+    console.log(`✅ Job ${job.id} (name: ${jobName}) for PDF "${originalFilename}" (from ${tempFilePath}) enqueued by user ${userId || 'anonymous'}.`)
 
     return NextResponse.json({
-      message: `Translation job for "${file.name}" has been queued successfully.`,
+      message: `Translation job for "${originalFilename}" has been queued successfully.`,
       jobId: job.id,
-      status: 'queued', // Initial status
-    }, { status: 202 }) // 202 Accepted
+      status: 'queued',
+    }, { status: 202 })
 
   } catch (error: any) {
     console.error('❌ API Route: Error queueing PDF translation job:', error)
@@ -111,7 +107,7 @@ export async function GET(req: NextRequest) {
     console.error('❌ API Route (GET): Translation queue is not initialized.')
     return NextResponse.json({ error: 'Translation service status cannot be determined.' }, { status: 503 })
   }
-  try {
+            try {
     const { searchParams } = new URL(req.url)
     const jobId = searchParams.get('jobId')
 
@@ -136,6 +132,11 @@ export async function GET(req: NextRequest) {
     const result = job.returnvalue // This will be TranslationResult[] upon completion
     const failedReason = job.failedReason
 
+    // Add a check for job.data to ensure it matches the new structure if needed for response
+    // For example, you might want to return some non-sensitive parts of job.data
+    // const jobInfo = { ...job.data }; // Be careful about exposing tempFilePath directly
+    // delete jobInfo.tempFilePath; 
+
     console.log(`🔍 API Route (GET): Status for job ${jobId}: ${state}, progress: ${progress}`)
 
     return NextResponse.json({
@@ -146,10 +147,9 @@ export async function GET(req: NextRequest) {
       timestamp: job.timestamp,
       processedOn: job.processedOn,
       finishedOn: job.finishedOn,
-      result, // Contains the array of TranslationResult if completed
+      result, 
       failedReason,
-      // You might want to include job.data here for debugging but be careful with sensitive info
-      // data: job.data 
+      // data: jobInfo // Example if you want to return parts of the job data
     })
   } catch (error: any) {
     console.error('❌ API Route (GET): Error getting job status:', error)
@@ -170,7 +170,7 @@ export async function DELETE(req: NextRequest) {
     console.error('❌ API Route (DELETE): Translation queue is not initialized.')
     return NextResponse.json({ error: 'Cannot cancel job, service unavailable.' }, { status: 503 })
   }
-  try {
+            try {
     const { searchParams } = new URL(req.url)
     const jobId = searchParams.get('jobId')
 

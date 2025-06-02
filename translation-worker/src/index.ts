@@ -2,6 +2,7 @@ import { Worker, Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import dotenv from 'dotenv';
 import { initializeWorkerEnvironment } from './worker-polyfills.js';
+import fs from 'fs';
 
 // Cast pdfjs-serverless import to any to bypass type checking for this module
 import * as PdfJsLibUntyped from 'pdfjs-serverless';
@@ -59,8 +60,8 @@ interface PdfTranslationJobData {
     name: string;
     type: string; 
     size: number;
-    buffer: string; // base64 encoded PDF
   };
+  tempFilePath: string;
   targetLanguage: string;
   userId?: string;
   userTier?: string; 
@@ -119,17 +120,52 @@ const worker = new Worker<
 >(
   QUEUE_NAME,
   async (job: Job<PdfTranslationJobData, TranslationResult[]>) => {
-    const { file, targetLanguage, userId, userTier } = job.data;
-    const { name: filename, buffer: fileBufferBase64 } = file;
+    const { file, tempFilePath, targetLanguage, userId, userTier } = job.data;
+    const { name: filename } = file;
 
     // Determine Gemini Model based on User Tier
     const geminiModel = userTier === 'pro' ? 'gemini-2.0-flash' : 'gemini-1.5-flash-8b';
-    console.log(`🚀 Processing PDF translation job ${job.id}: "${filename}" for user ${userId || 'anonymous'} (Tier: ${userTier || 'default'}, Model: ${geminiModel})`);
+    console.log(`🚀 Processing PDF translation job ${job.id}: "${filename}" from path "${tempFilePath}" for user ${userId || 'anonymous'} (Tier: ${userTier || 'default'}, Model: ${geminiModel})`);
 
     try {
       await job.updateProgress(0);
 
-      const pdfBuffer = Buffer.from(fileBufferBase64, 'base64');
+      // --- BEGIN DIAGNOSTIC LOGGING ---
+      console.log(`📄 Worker job ${job.id}: Received tempFilePath: "${tempFilePath}"`);
+      try {
+        const fileExists = fs.existsSync(tempFilePath);
+        console.log(`📄 Worker job ${job.id}: Does file exist at "${tempFilePath}"? ${fileExists}`);
+        if (!fileExists) {
+          console.log(`📄 Worker job ${job.id}: Current working directory: ${process.cwd()}`);
+          if (!tempFilePath.startsWith('/') && !tempFilePath.match(/^[a-zA-Z]:\\/)) { // crude check for absolute path
+            const commonTempDirs = ['/tmp', '/temp', '.'];
+            for (const dir of commonTempDirs) {
+              try {
+                const files = fs.readdirSync(dir);
+                console.log(`📄 Worker job ${job.id}: Listing files in "${dir}":`, files.slice(0, 10)); // Log first 10 files
+              } catch (e: any) {
+                console.log(`📄 Worker job ${job.id}: Could not list files in "${dir}": ${e.message}`);
+              }
+            }
+          }
+          const lastSeparatorIndex = Math.max(tempFilePath.lastIndexOf('/'), tempFilePath.lastIndexOf('\\'));
+          if (lastSeparatorIndex > 0) {
+            const dirOfTempFile = tempFilePath.substring(0, lastSeparatorIndex);
+            try {
+              const dirContents = fs.readdirSync(dirOfTempFile);
+              console.log(`📄 Worker job ${job.id}: Contents of directory "${dirOfTempFile}":`, dirContents.slice(0,10));
+            } catch (e: any) {
+              console.warn(`⚠️ Worker job ${job.id}: Could not list directory of temp file "${dirOfTempFile}": ${e.message}`);
+            }
+          }
+        }
+      } catch (e: any) {
+        console.error(`❌ Worker job ${job.id}: Error checking file existence for "${tempFilePath}": ${e.message}`, e.stack);
+      }
+      // --- END DIAGNOSTIC LOGGING ---
+
+      // Read the file from the temporary path
+      const pdfBuffer = fs.readFileSync(tempFilePath);
       // Convert Node.js Buffer to Uint8Array for pdfjs-serverless
       const pdfUint8Array = new Uint8Array(pdfBuffer.buffer, pdfBuffer.byteOffset, pdfBuffer.byteLength);
       
@@ -324,6 +360,15 @@ const worker = new Worker<
         await job.updateProgress(progress);
       }
 
+      // Clean up the temporary file after processing
+      fs.unlink(tempFilePath, (err) => {
+        if (err) {
+          console.warn(`⚠️ Failed to delete temporary file ${tempFilePath} for job ${job.id}:`, err);
+        } else {
+          console.log(`🗑️ Deleted temporary file ${tempFilePath} for job ${job.id}`);
+        }
+      });
+
       console.log(`✅ PDF "${filename}" (job ${job.id}) processing finished. ${allPageResults.length} pages handled.`);
       await job.updateProgress(100);
       return allPageResults;
@@ -332,14 +377,23 @@ const worker = new Worker<
       console.error(`❌❌ Overall PDF translation job ${job.id} ("${filename}") failed catastrophically:`, error.message, error.stack);
       const finalErrorMessage = error.message || 'Worker job for PDF failed with an unhandled error';
       await job.updateProgress(job.progress || 0); 
+      // Also attempt to delete the temp file on catastrophic failure
+      if (fs.existsSync(tempFilePath)) {
+        fs.unlink(tempFilePath, (unlinkErr) => {
+          if (unlinkErr) console.warn(`⚠️ Failed to delete temp file ${tempFilePath} during error handling:`, unlinkErr);
+          else console.log(`🗑️ Deleted temp file ${tempFilePath} during error handling.`);
+        });
+      }
       await job.moveToFailed(new Error(finalErrorMessage), 'worker-error-queue', true);
       throw error;
     }
   },
-  { 
+  {
     connection,
     concurrency: process.env.WORKER_CONCURRENCY ? parseInt(process.env.WORKER_CONCURRENCY) : 1, 
-    limiter: { max: 100, duration: 1000 } 
+    limiter: { max: 100, duration: 1000 },
+    lockDuration: 300000, // 5 minutes, to prevent lock mismatch on long jobs
+    // removeStalledJobs: true, // Consider this for production to clean up truly stalled jobs
   }
 );
 

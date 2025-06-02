@@ -5,12 +5,11 @@ import { useDropzone } from 'react-dropzone'
 import { Upload, Trash2, Lock, Save, User, Check, CreditCard } from 'lucide-react'
 import { useSession } from 'next-auth/react'
 import { extractImagesFromPDF } from './utils/pdfUtils'
-import { TranslationResult, TranslationJob, TranslationMetadata } from './types/translation'
+import { TranslationResult, TranslationJob, TranslationMetadata, TargetLanguage, UserTier } from './types/translation'
 import JobItem from './components/JobItem'
 import DownloadAllButton from './components/DownloadAllButton'
 import { processDocumentChunked } from './utils/chunkedTranslation'
 import FileStorageManager from './utils/fileStorage'
-import { TargetLanguage, UserTier } from './types/translation'
 import JobQueue from './components/JobQueue'
 import TranslationSettings from './components/TranslationSettings'
 import Header from './components/Header'
@@ -29,211 +28,403 @@ export default function Home() {
   const userTier: UserTier = (session?.user?.tier as UserTier) || 'free'
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    // File limits for anonymous users (more restrictive)
     const tierLimits = {
       free: { maxFiles: 1, maxSizeMB: 25 },
       basic: { maxFiles: 3, maxSizeMB: 25 },
       pro: { maxFiles: 10, maxSizeMB: 100 },
       enterprise: { maxFiles: 50, maxSizeMB: 2000 },
       anonymous: { maxFiles: 1, maxSizeMB: 5 }
-    }
+    };
+    const limits = session?.user ? tierLimits[userTier] : tierLimits.anonymous;
 
-    const limits = session?.user ? tierLimits[userTier] : tierLimits.anonymous
-    
     if (acceptedFiles.length > limits.maxFiles) {
       if (!session?.user) {
         alert(`Anonymous users can translate 1 file at a time (max 5MB). Sign in for higher limits!`)
       } else {
         alert(`${userTier} tier allows maximum ${limits.maxFiles} files. Please select fewer files.`)
       }
-      return
+      return;
     }
 
-    const validFiles = acceptedFiles.filter(file => {
-      const sizeMB = file.size / (1024 * 1024)
+    const newJobs: TranslationJob[] = [];
+    const filesToProcess: { originalFile: File, tempUploadData?: any }[] = acceptedFiles.map(f => ({ originalFile: f }));
+
+    // Step 1: Upload all files to temporary storage first
+    for (const fileWrapper of filesToProcess) {
+      const file = fileWrapper.originalFile;
+      const sizeMB = file.size / (1024 * 1024);
       if (sizeMB > limits.maxSizeMB) {
         if (!session?.user) {
-          alert(`File "${file.name}" (${Math.round(sizeMB)}MB) exceeds anonymous limit of ${limits.maxSizeMB}MB. Sign in for higher limits!`)
+          alert(`File "${file.name}" (${Math.round(sizeMB)}MB) exceeds anonymous limit of ${limits.maxSizeMB}MB. Sign in for higher limits!`);
         } else {
-          alert(`File "${file.name}" (${Math.round(sizeMB)}MB) exceeds ${userTier} tier limit of ${limits.maxSizeMB}MB`)
+          alert(`File "${file.name}" (${Math.round(sizeMB)}MB) exceeds ${userTier} tier limit of ${limits.maxSizeMB}MB`);
         }
-        return false
+        continue; // Skip this file
       }
-      return true
-    })
 
-    if (validFiles.length === 0) {
-      alert('No valid files to process.')
-      return
+      try {
+        const tempForm = new FormData();
+        tempForm.append('file', file);
+        const tempUploadResponse = await fetch('/api/upload-temp-file', {
+          method: 'POST',
+          body: tempForm,
+        });
+
+        if (!tempUploadResponse.ok) {
+          const errorData = await tempUploadResponse.json();
+          throw new Error(errorData.error || 'Failed to upload file for temporary storage');
+        }
+        fileWrapper.tempUploadData = await tempUploadResponse.json();
+      } catch (error) {
+        console.error(`Failed to temporarily upload ${file.name}:`, error);
+        alert(`Could not prepare ${file.name} for translation: ${error instanceof Error ? error.message : 'Upload error'}. Please try again.`);
+        // Mark this file as failed to prevent further processing
+        fileWrapper.tempUploadData = null; 
+      }
     }
 
-    const totalSizeMB = validFiles.reduce((sum, file) => sum + file.size / (1024 * 1024), 0)
+    const validFilesToProcess = filesToProcess.filter(f => f.tempUploadData);
+
+    if (validFilesToProcess.length === 0) {
+      if (acceptedFiles.length > 0) alert('No files were successfully prepared for translation.');
+      return;
+    }
     
-    if (validFiles.length > 1) {
+    const totalSizeMB = validFilesToProcess.reduce((sum, f) => sum + f.originalFile.size / (1024 * 1024), 0);
+    if (validFilesToProcess.length > 1) {
       const confirmed = confirm(
-        `You are about to process ${validFiles.length} PDF files (${Math.round(totalSizeMB)}MB total). ` +
+        `You are about to process ${validFilesToProcess.length} PDF files (${Math.round(totalSizeMB)}MB total). ` +
         `This will use significant computational resources. Continue?`
       )
       if (!confirmed) return
     }
 
-    console.log(`📁 Processing ${validFiles.length} files for ${session?.user ? userTier : 'anonymous'} user`)
+    console.log(`📁 Preparing ${validFilesToProcess.length} files for ${session?.user ? userTier : 'anonymous'} user`);
 
-    // Create all jobs first so they show immediately
-    const newJobs: TranslationJob[] = []
+    for (const { originalFile, tempUploadData } of validFilesToProcess) {
+      if (!tempUploadData) continue; // Should have been filtered, but as a safeguard
 
-    for (const file of validFiles) {
-      const jobId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9)
-      const abortController = new AbortController()
-      let documentId: string | undefined = undefined
-      
-      // Only create database record if user is authenticated
+      const jobId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
+      const abortController = new AbortController();
+      let documentId: string | undefined = undefined;
+
+      const { tempFilePath, originalFilename, fileType, fileSize } = tempUploadData;
+
       if (session?.user) {
         try {
-          // Create document in database first
           const documentResponse = await fetch('/api/documents', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              originalFilename: file.name,
-              title: file.name.replace('.pdf', ''),
+              originalFilename: originalFilename, // Use filename from temp upload
+              title: originalFilename.replace(/\.pdf$/i, ''),
               targetLanguage: selectedLanguage,
-              originalFileSize: file.size,
-              translationSettings: {
-                extractImages: true,
-                userTier,
-              }
+              originalFileSize: fileSize, // Use fileSize from temp upload
+              translationSettings: { extractImages: true, userTier }
             })
-          })
+          });
 
           if (!documentResponse.ok) {
-            const error = await documentResponse.json()
-            
-            // Handle specific error codes
+            const error = await documentResponse.json();
             if (error.code === 'DOCUMENT_LIMIT_EXCEEDED' || error.code === 'STORAGE_LIMIT_EXCEEDED') {
-              alert(error.error)
-              continue // Skip this file but process others
+              alert(error.error);
+              continue; 
             }
-            
-            throw new Error(error.error || 'Failed to create document')
+            throw new Error(error.error || 'Failed to create document');
           }
-
-          const { document } = await documentResponse.json()
-          documentId = document.id
+          const { document } = await documentResponse.json();
+          documentId = document.id;
         } catch (error) {
-          console.error(`Failed to create document for ${file.name}:`, error)
-          alert(`Failed to start processing for ${file.name}: ${error instanceof Error ? error.message : 'Unknown error'}`)
-          continue
+          console.error(`Failed to create document for ${originalFilename}:`, error);
+          alert(`Failed to start processing for ${originalFilename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          continue;
         }
       }
         
-      // Create form data for the translation request
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('targetLanguage', selectedLanguage)
-
-      // Queue the translation job
+      // Queue the translation job using tempFilePath
       try {
-        const response = await fetch('/api/translate', {
-          method: 'POST',
-          body: formData
-        })
+        const payloadToQueue = {
+          tempFilePath,
+          originalFilename,
+          fileType,
+          fileSize,
+          targetLanguage: selectedLanguage,
+          // userId and userTier are implicitly handled by the /api/translate if needed via session
+        };
+        console.log("[DEBUG] Queueing translation with data:", payloadToQueue); // Added for debugging
 
-        if (!response.ok) {
-          throw new Error('Failed to queue translation job')
+        const queueResponse = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payloadToQueue)
+        });
+
+        if (!queueResponse.ok) {
+          const errorData = await queueResponse.json();
+          throw new Error(errorData.error || 'Failed to queue translation job');
         }
 
-        const { jobId: queueJobId } = await response.json()
+        const { jobId: queueJobId } = await queueResponse.json();
         
-      const job: TranslationJob = {
-        id: jobId,
-        filename: file.name,
+        const job: TranslationJob = {
+          id: jobId,
+          filename: originalFilename, // Use filename from temp upload
           status: 'queued',
-        progress: 0,
-        originalFile: file,
-        abortController,
+          progress: 0,
+          originalFile: originalFile, // Keep original File object for UI/display if needed
+          abortController,
           statusMessage: 'Queued for translation...',
           documentId,
-          queueJobId // Store the queue job ID for status updates
-      }
-
-      newJobs.push(job)
+          queueJobId 
+        };
+        newJobs.push(job);
       } catch (error) {
-        console.error(`Failed to queue translation for ${file.name}:`, error)
-        alert(`Failed to queue translation for ${file.name}: ${error instanceof Error ? error.message : 'Unknown error'}`)
-        continue
+        console.error(`Failed to queue translation for ${originalFilename}:`, error);
+        alert(`Failed to queue translation for ${originalFilename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        continue;
       }
     }
 
-    // Add all valid jobs to state immediately so they show up
-    setJobs(prev => [...prev, ...newJobs])
+    setJobs(prev => [...prev, ...newJobs]);
 
-    // Show save prompt for anonymous users after they start translation
     if (!session?.user && newJobs.length > 0) {
-      setShowSavePrompt(true)
+      setShowSavePrompt(true);
     }
 
-    // Start polling for job status
     for (const job of newJobs) {
       if (job.queueJobId) {
-        pollJobStatus(job.queueJobId, job.id)
+        pollJobStatus(job.queueJobId, job.id);
       }
     }
   }, [selectedLanguage, userTier, session])
+
+  // Function to update document in DB after completion and file uploads
+  const updateCompletedDocumentInDB = async (
+    documentId: string,
+    results: TranslationResult[],
+    originalFilename: string,
+    targetLanguage: TargetLanguage,
+    userId: string,
+    processingTimeMs?: number
+  ) => {
+    if (!session?.user?.id || !documentId) {
+      console.error("User ID or Document ID is missing, cannot update document in DB.");
+      // Update UI to reflect this error for the specific job
+      setJobs(prevJobs => prevJobs.map(j => {
+        if (j.documentId === documentId) {
+          return {
+            ...j,
+            status: 'error' as const,
+            error: 'User session or document ID missing. Cannot save results.',
+            statusMessage: 'Error: Could not save to your account.'
+          };
+        }
+        return j;
+      }));
+      return;
+    }
+
+    let translatedPdfUrl: string | undefined = undefined;
+    let translatedHtmlUrl: string | undefined = undefined;
+    let updateError: string | null = null;
+
+    try {
+      console.log(`[DB Update] Starting PDF generation for ${documentId}`);
+      const pdfUploadResult = await FileStorageManager.generateAndUploadPDF(
+        userId,
+        documentId,
+        results,
+        originalFilename
+      );
+      translatedPdfUrl = pdfUploadResult.url;
+      console.log(`[DB Update] PDF ready: ${translatedPdfUrl}`);
+
+      console.log(`[DB Update] Starting HTML generation for ${documentId}`);
+      const htmlUploadResult = await FileStorageManager.generateAndUploadHTML(
+        userId,
+        documentId,
+        results,
+        originalFilename,
+        targetLanguage
+      );
+      translatedHtmlUrl = htmlUploadResult.url;
+      console.log(`[DB Update] HTML ready: ${translatedHtmlUrl}`);
+      
+      const payload = {
+        status: 'completed',
+        progress: 100,
+        translatedPdfUrl,
+        translatedHtmlUrl,
+        pageCount: results.length,
+        processingTimeMs: processingTimeMs || undefined,
+      };
+
+      console.log(`[DB Update] Sending PUT request for ${documentId} with payload:`, payload);
+      const response = await fetch(`/api/documents/${documentId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        updateError = errorData.error || 'Failed to update document in DB';
+        throw new Error(updateError !== null ? updateError : 'Failed to update document in DB (unknown error)');
+      }
+
+      const updatedDocumentData = await response.json();
+      console.log(`[DB Update] Successfully updated document ${documentId}:`, updatedDocumentData);
+
+    } catch (error) {
+      console.error(`[DB Update] Error updating document ${documentId} in DB:`, error);
+      updateError = error instanceof Error ? error.message : 'Unknown DB update/upload error';
+    } finally {
+      // Update job status in UI regardless of success or failure of DB update
+      // This ensures the job itself is marked as 'completed' or 'error' based on the outcome
+      setJobs(prevJobs => prevJobs.map(j => {
+        if (j.documentId === documentId) {
+          if (updateError) {
+            return {
+              ...j,
+              status: 'error' as const,
+              error: updateError !== null ? `Failed to save results: ${updateError}` : undefined,
+              statusMessage: updateError !== null ? `Error saving to account: ${updateError}. Files might not be available.` : 'Error saving to account. Files might not be available.',
+              results, 
+              translatedPdfUrl: translatedPdfUrl || j.translatedPdfUrl,
+              translatedHtmlUrl: translatedHtmlUrl || j.translatedHtmlUrl,
+            };
+          } else {
+            // Successful update
+            return {
+              ...j,
+              status: 'completed' as const,
+              progress: 100,
+              results,
+              statusMessage: 'Translation complete & saved!',
+              translatedPdfUrl,
+              translatedHtmlUrl,
+            };
+          }
+        }
+        return j;
+      }));
+    }
+  };
 
   // Add polling function
   const pollJobStatus = async (queueJobId: string, localJobId: string) => {
     const pollInterval = setInterval(async () => {
       try {
-        const response = await fetch(`/api/translate?jobId=${queueJobId}`)
+        const response = await fetch(`/api/translate?jobId=${queueJobId}`);
         if (!response.ok) {
-          throw new Error('Failed to get job status')
+          const errorText = await response.text(); 
+          throw new Error(`Failed to get job status: ${response.status} ${errorText}`);
         }
 
-        const { state, progress, result } = await response.json()
+        // Ensure result is properly typed if it comes from an API
+        const jobStatusData = await response.json() as { 
+          state: 'completed' | 'failed' | 'active' | 'waiting' | 'delayed' | 'paused'; 
+          progress: number; 
+          result?: TranslationResult[]; // Corrected: result is the array directly, or undefined
+          failedReason?: string;
+          processedOn?: string; // BullMQ job property
+          finishedOn?: string;  // BullMQ job property
+        };
 
-        setJobs(prev => prev.map(job => {
+        setJobs(prevJobs => prevJobs.map(job => {
           if (job.id === localJobId) {
-            const updatedJob = { ...job }
+            const updatedJob = { ...job };
 
-            // Update status based on queue state
-            switch (state) {
+            switch (jobStatusData.state) {
               case 'completed':
-                updatedJob.status = 'completed'
-                updatedJob.progress = 100
-                updatedJob.results = result?.results
-                updatedJob.statusMessage = 'Translation complete!'
-                clearInterval(pollInterval)
-                break
-              case 'failed':
-                updatedJob.status = 'error'
-                updatedJob.error = result?.error || 'Translation failed'
-                clearInterval(pollInterval)
-                break
-              case 'active':
-                updatedJob.status = 'processing'
-                updatedJob.progress = progress || 0
-                updatedJob.statusMessage = 'Processing...'
-                break
-              case 'waiting':
-                updatedJob.status = 'queued'
-                updatedJob.progress = 0
-                updatedJob.statusMessage = 'Waiting to start...'
-                break
-            }
+                updatedJob.status = 'completed';
+                updatedJob.progress = 100;
+                updatedJob.results = jobStatusData.result; // Corrected assignment
+                updatedJob.statusMessage = 'Translation complete!';
+                clearInterval(pollInterval);
 
-            return updatedJob
+                if (updatedJob.documentId && session?.user?.id && updatedJob.results && updatedJob.results.length > 0) {
+                  let jobProcessingTimeMs: number | undefined = undefined;
+                  // Use finishedOn and processedOn from the top-level jobStatusData (more reliable from BullMQ)
+                  if (jobStatusData.finishedOn && jobStatusData.processedOn) {
+                    jobProcessingTimeMs = new Date(jobStatusData.finishedOn).getTime() - new Date(jobStatusData.processedOn).getTime();
+                  }
+                  
+                  updateCompletedDocumentInDB(
+                    updatedJob.documentId,
+                    updatedJob.results, // This should now be correctly populated
+                    updatedJob.filename,
+                    selectedLanguage,
+                    session.user.id,
+                    jobProcessingTimeMs
+                  ).catch(error => {
+                    // This catch is for unexpected errors from updateCompletedDocumentInDB itself,
+                    // though it's designed to handle its own UI updates.
+                    console.error("Error during updateCompletedDocumentInDB:", error);
+                    // Minimal update here as updateCompletedDocumentInDB should handle detailed UI.
+                     setJobs(prev => prev.map(job => job.id === localJobId ? {
+                       ...job, status: 'error', error: 'Failed to finalize completion.', statusMessage: 'Error saving results.'
+                     } : job));
+                  });
+                  // Note: We are not returning updatedJob directly here because updateCompletedDocumentInDB
+                  // will set the job's state asynchronously. The current switch case's job update
+                  // should primarily reflect the worker's direct status ('completed' from worker).
+                  // The final state (saved, or error saving) will be set by updateCompletedDocumentInDB.
+                } else if (!updatedJob.results || updatedJob.results.length === 0) {
+                  console.warn(`Job ${localJobId} for document ${updatedJob.documentId} completed but has no results. Marking as error.`);
+                  updatedJob.status = 'error';
+                  updatedJob.error = 'Completed with no translation data.';
+                  updatedJob.statusMessage = 'Error: No translation data received.';
+                } else if (!updatedJob.documentId || !session?.user?.id) {
+                  console.warn(`Job ${localJobId} completed but cannot be saved (no documentId or user session). Status remains completed locally.`);
+                  // UI will show completed, but it won't be persisted if there's no documentId/user
+                  updatedJob.statusMessage = 'Completed (not saved to account).';
+                }
+                break;
+              case 'failed':
+                updatedJob.status = 'error';
+                updatedJob.error = jobStatusData.failedReason || 'Translation failed in worker';
+                updatedJob.statusMessage = `Error: ${jobStatusData.failedReason || 'Translation failed'}`;
+                clearInterval(pollInterval);
+                break;
+              case 'active':
+                updatedJob.status = 'processing';
+                updatedJob.progress = jobStatusData.progress || 0;
+                updatedJob.statusMessage = 'Processing...';
+                break;
+              case 'waiting': // Added other bullmq states for completeness
+              case 'delayed':
+              case 'paused':
+                updatedJob.status = 'queued';
+                updatedJob.progress = 0;
+                updatedJob.statusMessage = `Queued (${jobStatusData.state})...`;
+                break;
+            }
+            return updatedJob;
           }
-          return job
-        }))
+          return job;
+        }));
       } catch (error) {
-        console.error('Error polling job status:', error)
-        clearInterval(pollInterval)
+        console.error(`Error polling job status for ${localJobId} (queue ID: ${queueJobId}):`, error);
+        // Clear interval for this job on error to prevent infinite loops if API is down
+        clearInterval(pollInterval);
+        // Optionally update job state to show an error
+        setJobs(prevJobs => prevJobs.map(job => {
+          if (job.id === localJobId) {
+            return {
+              ...job,
+              status: 'error' as const,
+              error: `Polling failed: ${error instanceof Error ? error.message : 'Unknown polling error'}`,
+              statusMessage: 'Error fetching update. Please check connection.'
+            };
           }
-    }, 2000) // Poll every 2 seconds
-  }
+          return job;
+        }));
+      }
+    }, 3000);
+  };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
