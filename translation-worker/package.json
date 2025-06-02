@@ -1,6 +1,7 @@
 {
   "name": "translation-worker",
   "version": "1.0.0",
+  "type": "module",
   "description": "Translation worker for PDF translation service",
   "main": "dist/index.js",
   "scripts": {
