@@ -1,0 +1,15 @@
+# nixpacks.toml (in your translation-worker directory)
+
+# System packages to install
+# These are common dependencies for node-canvas on Debian/Ubuntu
+aptPkgs = ["build-essential", "libcairo2-dev", "libpango1.0-dev", "libjpeg-dev", "libgif-dev", "librsvg2-dev"]
+
+# If you want to customize phases (optional, Nixpacks usually infers these well)
+# [phases.install]
+# cmds = ["npm install"] # Default is usually fine
+
+# [phases.build]
+# cmds = ["npm run build"] # Default is usually fine
+
+# [start]
+# cmd = "npm run start" # Default is usually fine 

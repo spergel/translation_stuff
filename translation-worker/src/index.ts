@@ -402,7 +402,12 @@ worker.on('failed', (job, err) => {
 });
 
 worker.on('progress', (job, progress) => {
-  console.log(`📈 Job ${job.id} for "${job.data.file.name}" progress: ${progress}%`);
+  // Ensure progress is a number before performing arithmetic
+  const numericProgress = Number(progress);
+  // Only log progress every 10% or when it's 0% or 100% to reduce noise
+  if (!isNaN(numericProgress) && (numericProgress % 10 === 0 || numericProgress === 0 || numericProgress === 100)) {
+    console.log(`📈 Job ${job.id} for "${job.data.file.name}" progress: ${numericProgress}%`);
+  }
 });
 
 process.on('SIGTERM', async () => {

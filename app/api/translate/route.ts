@@ -57,6 +57,17 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // --- Validate Filename ---
+    const validFilenameRegex = /^[a-zA-Z0-9_.-]+$/;
+    if (!validFilenameRegex.test(originalFilename)) {
+      console.warn(`❌ API Route: Invalid filename received: "${originalFilename}". User ID: ${session?.user?.id || 'anonymous'}`);
+      return NextResponse.json(
+        { error: 'Invalid filename. Please use only English letters, numbers, underscores, hyphens, and periods (e.g., my_document-1.pdf).' },
+        { status: 400 }
+      );
+    }
+    // --- End Validate Filename ---
+
     if (fileType !== 'application/pdf') {
       return NextResponse.json(
         { error: 'Invalid file type. Only PDF files are accepted.' },
