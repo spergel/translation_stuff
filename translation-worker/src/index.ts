@@ -130,8 +130,10 @@ const worker = new Worker<
       await job.updateProgress(0);
 
       const pdfBuffer = Buffer.from(fileBufferBase64, 'base64');
-      // Use PdfJsLib (cast to any) and assume getDocument, PDFDocumentProxy, PDFPageProxy exist at runtime
-      const pdfDocument: any /* PDFDocumentProxy */ = await PdfJsLib.getDocument({ data: pdfBuffer, useSystemFonts: true }).promise;
+      // Convert Node.js Buffer to Uint8Array for pdfjs-serverless
+      const pdfUint8Array = new Uint8Array(pdfBuffer.buffer, pdfBuffer.byteOffset, pdfBuffer.byteLength);
+      
+      const pdfDocument: any /* PDFDocumentProxy */ = await PdfJsLib.getDocument({ data: pdfUint8Array, useSystemFonts: true }).promise;
       const totalPages = pdfDocument.numPages;
 
       console.log(`📄 PDF "${filename}" has ${totalPages} pages.`);
