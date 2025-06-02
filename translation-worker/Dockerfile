@@ -13,8 +13,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies and generate package-lock.json
-RUN npm install --omit=dev
+# Install ALL dependencies (including dev) for building
+RUN npm install
 
 # Copy source
 COPY . .
