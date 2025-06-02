@@ -17,7 +17,12 @@ nixPkgs = [
   "librsvg",         # SVG rendering library
   "nodejs",          # Node.js (includes npm)
   "python3",         # Python 3 for node-gyp
-  "which"            # For `which python3` command
+  "which",           # For `which python3` command
+  "pixman",          # Low-level pixel manipulation library
+  "freetype",        # Font rendering library
+  "fontconfig",      # Font configuration and customization library
+  "libpng",          # PNG image format library
+  "zlib"             # Data compression library
   # Sometimes development headers are in separate .dev or .lib packages in Nix
   # e.g., "cairo.dev", "pango.dev". For now, trying the base names.
 ]
