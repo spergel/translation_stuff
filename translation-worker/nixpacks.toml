@@ -27,7 +27,11 @@ nixPkgs = [
   "xorg.libXext",     # X11 extension library
   "xorg.libXrender",  # X11 rendering library
   "xorg.libXtst",     # X11 test library
-  "xorg.libXi"        # X11 input library
+  "xorg.libXi",       # X11 input library
+  "glib",            # General-purpose library
+  "harfbuzz",        # Font shaping library
+  "expat",           # XML parser library
+  "libffi"           # Foreign Function Interface library
   # Sometimes development headers are in separate .dev or .lib packages in Nix
   # e.g., "cairo.dev", "pango.dev". For now, trying the base names.
 ]
@@ -49,6 +53,18 @@ cmds = [
   "export PYTHON_COMMAND_PATH=/root/.nix-profile/bin/python3",
   "export npm_config_build_from_source=true",
   "export npm_config_canvas_binary_host_mirror=https://registry.npmmirror.com/-/binary/canvas",
+  "export npm_config_canvas_build_from_source=true",
+  "export npm_config_canvas_use_system_libs=true",
+  "export npm_config_canvas_use_system_cairo=true",
+  "export npm_config_canvas_use_system_pango=true",
+  "export npm_config_canvas_use_system_pixman=true",
+  "export npm_config_canvas_use_system_freetype=true",
+  "export npm_config_canvas_use_system_fontconfig=true",
+  "export npm_config_canvas_use_system_libpng=true",
+  "export npm_config_canvas_use_system_zlib=true",
+  "export npm_config_canvas_use_system_jpeg=true",
+  "export npm_config_canvas_use_system_gif=true",
+  "export npm_config_canvas_use_system_svg=true",
   "echo 'Running npm install...'",
   "npm install --verbose"
 ]
