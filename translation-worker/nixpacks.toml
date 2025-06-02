@@ -15,6 +15,7 @@ nixPkgs = [
   "libjpeg",         # JPEG image compression library
   "giflib",          # GIF image format library
   "librsvg",         # SVG rendering library
+  "nodejs",          # Node.js (includes npm)
   # Sometimes development headers are in separate .dev or .lib packages in Nix
   # e.g., "cairo.dev", "pango.dev". For now, trying the base names.
 ]
