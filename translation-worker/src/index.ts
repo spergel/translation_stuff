@@ -1,8 +1,12 @@
 import { Worker, Job } from 'bullmq';
-import IORedis from 'ioredis';
+import { Redis } from 'ioredis';
 import dotenv from 'dotenv';
-import { initializeWorkerEnvironment } from './worker-polyfills';
-import { getDocument, PDFDocumentProxy, PDFPageProxy } from 'pdfjs-serverless';
+import { initializeWorkerEnvironment } from './worker-polyfills.js';
+
+// Cast pdfjs-serverless import to any to bypass type checking for this module
+import * as PdfJsLibUntyped from 'pdfjs-serverless';
+const PdfJsLib: any = PdfJsLibUntyped;
+
 import { createCanvas, Canvas, CanvasRenderingContext2D } from 'canvas'; // For rendering PDF pages to images
 
 // Initialize serverless environment polyfills for the worker
@@ -12,19 +16,19 @@ initializeWorkerEnvironment();
 dotenv.config();
 
 // Redis connection configuration
-const connection = new IORedis(process.env.REDIS_CONNECTION_STRING!, {
+const connection = new Redis(process.env.REDIS_CONNECTION_STRING!, {
   tls: {
     rejectUnauthorized: false // Adjust as per your Redis security settings
   },
   maxRetriesPerRequest: null,
-  retryStrategy: (times) => {
+  retryStrategy: (times: number) => {
     const delay = Math.min(times * 50, 2000);
     return delay;
   }
 });
 
 connection.on('connect', () => console.log('🔗 Worker: Redis connected'));
-connection.on('error', (err) => console.error('❌ Worker: Redis connection error:', err));
+connection.on('error', (err: Error) => console.error('❌ Worker: Redis connection error:', err));
 
 // Queue name
 const QUEUE_NAME = 'translation-jobs';
@@ -63,7 +67,7 @@ interface PdfTranslationJobData {
 }
 
 // Helper: Render a PDF page to a PNG data URI
-async function renderPageToImage(page: PDFPageProxy): Promise<string> {
+async function renderPageToImage(page: any /* PDFPageProxy */): Promise<string> {
   const viewport = page.getViewport({ scale: 1.5 }); 
   const canvas = createCanvas(viewport.width, viewport.height) as unknown as Canvas;
   const context = canvas.getContext('2d') as unknown as CanvasRenderingContext2D;
@@ -126,7 +130,8 @@ const worker = new Worker<
       await job.updateProgress(0);
 
       const pdfBuffer = Buffer.from(fileBufferBase64, 'base64');
-      const pdfDocument: PDFDocumentProxy = await getDocument({ data: pdfBuffer, useSystemFonts: true }).promise;
+      // Use PdfJsLib (cast to any) and assume getDocument, PDFDocumentProxy, PDFPageProxy exist at runtime
+      const pdfDocument: any /* PDFDocumentProxy */ = await PdfJsLib.getDocument({ data: pdfBuffer, useSystemFonts: true }).promise;
       const totalPages = pdfDocument.numPages;
 
       console.log(`📄 PDF "${filename}" has ${totalPages} pages.`);
@@ -143,7 +148,7 @@ const worker = new Worker<
           throw new Error('Job cancelled by user');
         }
 
-        const page: PDFPageProxy = await pdfDocument.getPage(currentPageNumber);
+        const page: any /* PDFPageProxy */ = await pdfDocument.getPage(currentPageNumber);
         const textContent = await page.getTextContent();
         const originalPageText = textContent.items.map((item: any) => item.str).join(' \n');
         const pageImageBase64 = await renderPageToImage(page);
