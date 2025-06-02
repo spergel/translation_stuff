@@ -1,6 +1,12 @@
-import { Worker } from 'bullmq';
+import { Worker, Job } from 'bullmq';
 import IORedis from 'ioredis';
 import dotenv from 'dotenv';
+import { initializeWorkerEnvironment } from './worker-polyfills';
+import { getDocument, PDFDocumentProxy, PDFPageProxy } from 'pdfjs-serverless';
+import { createCanvas, Canvas, CanvasRenderingContext2D } from 'canvas'; // For rendering PDF pages to images
+
+// Initialize serverless environment polyfills for the worker
+initializeWorkerEnvironment();
 
 // Load environment variables
 dotenv.config();
@@ -8,7 +14,7 @@ dotenv.config();
 // Redis connection configuration
 const connection = new IORedis(process.env.REDIS_CONNECTION_STRING!, {
   tls: {
-    rejectUnauthorized: false
+    rejectUnauthorized: false // Adjust as per your Redis security settings
   },
   maxRetriesPerRequest: null,
   retryStrategy: (times) => {
@@ -17,10 +23,13 @@ const connection = new IORedis(process.env.REDIS_CONNECTION_STRING!, {
   }
 });
 
+connection.on('connect', () => console.log('🔗 Worker: Redis connected'));
+connection.on('error', (err) => console.error('❌ Worker: Redis connection error:', err));
+
 // Queue name
 const QUEUE_NAME = 'translation-jobs';
 
-// Define response type
+// Define response type from Gemini
 interface GeminiResponse {
   candidates?: Array<{
     content?: {
@@ -31,165 +40,324 @@ interface GeminiResponse {
   }>;
 }
 
+// Define the structure of the translation result for a single page
+interface TranslationResult {
+  page_number: number;
+  original_text: string;
+  translated_text: string;
+  page_image: string; // base64 image data (Data URI)
+  notes: string;
+}
+
+// Define the expected job data structure
+interface PdfTranslationJobData {
+  file: {
+    name: string;
+    type: string; 
+    size: number;
+    buffer: string; // base64 encoded PDF
+  };
+  targetLanguage: string;
+  userId?: string;
+  userTier?: string; 
+}
+
+// Helper: Render a PDF page to a PNG data URI
+async function renderPageToImage(page: PDFPageProxy): Promise<string> {
+  const viewport = page.getViewport({ scale: 1.5 }); 
+  const canvas = createCanvas(viewport.width, viewport.height) as unknown as Canvas;
+  const context = canvas.getContext('2d') as unknown as CanvasRenderingContext2D;
+  await page.render({ canvasContext: context, viewport: viewport }).promise;
+  return canvas.toDataURL('image/png');
+}
+
+// Helper: Robust JSON parsing
+function tryParseJSON(jsonString: string | undefined, pageNumber: number, job_id: string | number | undefined, attemptType: string) {
+  if (!jsonString) {
+    console.warn(`   ⚠️ Attempted to parse undefined/empty JSON string for ${attemptType} page ${pageNumber} (job ${job_id})`);
+    return null;
+  }
+  try {
+    return JSON.parse(jsonString);
+  } catch (parseError) {
+    console.error(`   ❌ Failed to parse ${attemptType} JSON for page ${pageNumber} (job ${job_id}):`, parseError);
+    console.error(`   Broken ${attemptType} response fragment (job ${job_id}):`, jsonString?.slice(0, 500));
+    let fixed = jsonString;
+    const lastBrace = fixed.lastIndexOf('}');
+    if (lastBrace !== -1) {
+        // Ensure that we only trim if it seems like a truncated object or array
+        const trimmed = fixed.slice(0, lastBrace + 1);
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+            fixed = trimmed;
+        } else {
+            console.warn(`   ⚠️ JSON trimming for ${attemptType} page ${pageNumber} (job ${job_id}) might result in invalid JSON as it does not start/end with braces/brackets.`);
+        }
+    } else {
+        console.warn(`   ⚠️ No closing brace found for ${attemptType} page ${pageNumber} (job ${job_id}) JSON, cannot trim.`);
+        return null; // Cannot fix if no closing brace
+    }
+
+    try { 
+      const parsed = JSON.parse(fixed); 
+      console.warn(`   ✅ Successfully parsed ${attemptType} page ${pageNumber} (job ${job_id}) after trimming.`);
+      return parsed;
+    } catch (e2) {
+      console.error(`   ❌ Still failed to parse ${attemptType} for page ${pageNumber} (job ${job_id}) after trimming:`, e2);
+      return null; // Indicate failure to parse
+    }
+  }
+}
+
 // Create worker
-const worker = new Worker(
+const worker = new Worker<
+  PdfTranslationJobData,      
+  TranslationResult[]         
+>(
   QUEUE_NAME,
-  async (job) => {
-    console.log('Processing job:', job.id);
+  async (job: Job<PdfTranslationJobData, TranslationResult[]>) => {
     const { file, targetLanguage, userId, userTier } = job.data;
+    const { name: filename, buffer: fileBufferBase64 } = file;
+
+    // Determine Gemini Model based on User Tier
+    const geminiModel = userTier === 'pro' ? 'gemini-2.0-flash' : 'gemini-1.5-flash-8b';
+    console.log(`🚀 Processing PDF translation job ${job.id}: "${filename}" for user ${userId || 'anonymous'} (Tier: ${userTier || 'default'}, Model: ${geminiModel})`);
 
     try {
-      // Update progress to 0
       await job.updateProgress(0);
 
-      // Process the file in chunks
-      const results = [];
-      const totalPages = 10; // TODO: Get actual page count from PDF
+      const pdfBuffer = Buffer.from(fileBufferBase64, 'base64');
+      const pdfDocument: PDFDocumentProxy = await getDocument({ data: pdfBuffer, useSystemFonts: true }).promise;
+      const totalPages = pdfDocument.numPages;
 
-      for (let pageNumber = 1; pageNumber <= totalPages; pageNumber++) {
-        // Check if job was cancelled
+      console.log(`📄 PDF "${filename}" has ${totalPages} pages.`);
+      const allPageResults: TranslationResult[] = [];
+
+      for (let i = 1; i <= totalPages; i++) {
+        const currentPageNumber = i;
+        let pageNotes = `Model: ${geminiModel}.`; // Start with model info
+        let processingStartTime = Date.now();
+
+        console.log(`📄 Processing page ${currentPageNumber}/${totalPages} of "${filename}" for job ${job.id}`);
         if (!(await job.isActive())) {
-          return { status: 'cancelled' };
+          console.warn(`⚠️ Job ${job.id} was cancelled. Stopping processing for "${filename}".`);
+          throw new Error('Job cancelled by user');
         }
 
-        // Process each page
-        const pageResult = await processPage(file, pageNumber, targetLanguage, totalPages);
-        results.push(pageResult);
+        const page: PDFPageProxy = await pdfDocument.getPage(currentPageNumber);
+        const textContent = await page.getTextContent();
+        const originalPageText = textContent.items.map((item: any) => item.str).join(' \n');
+        const pageImageBase64 = await renderPageToImage(page);
+        const imageOnly = originalPageText.trim().length < 20;
+        
+        pageNotes += ` Mode: ${imageOnly ? 'Image-Only' : 'Text+Image'}.`;
+        console.log(`   📄 Page ${currentPageNumber}: Extracted text length: ${originalPageText.length}, ${pageNotes}`);
 
-        // Update progress
-        const progress = Math.round((pageNumber / totalPages) * 100);
+        const targetLangName = {
+          'chinese': 'Traditional Chinese', 'english': 'English', 'japanese': 'Japanese',
+          'korean': 'Korean', 'spanish': 'Spanish', 'french': 'French',
+          'german': 'German', 'italian': 'Italian', 'portuguese': 'Portuguese',
+          'russian': 'Russian', 'arabic': 'Arabic'
+        }[targetLanguage] || targetLanguage;
+
+        let finalExtractedText = imageOnly ? "[Image text to be extracted by Gemini]" : originalPageText;
+        let finalTranslatedText = "[Translation pending]";
+        let attemptSuccess = false;
+
+        const geminiApiKey = process.env.GOOGLE_API_KEY;
+        if (!geminiApiKey) {
+            console.error("❌ GOOGLE_API_KEY is not set for job", job.id);
+            throw new Error("GOOGLE_API_KEY environment variable is not set.");
+        }
+
+        // --- Attempt 1: Combined Extraction and Translation ---
+        const combinedPromptParts: any[] = [];
+        if (imageOnly) {
+          combinedPromptParts.push({ inlineData: { mimeType: "image/png", data: pageImageBase64.split(',')[1] } });
+          combinedPromptParts.push({ text: `Extract ALL text from this image and translate it to ${targetLangName}. Be thorough. This is Page ${currentPageNumber} of ${totalPages} from document titled "${filename}".` });
+        } else {
+          combinedPromptParts.push({ inlineData: { mimeType: "image/png", data: pageImageBase64.split(',')[1] } });
+          combinedPromptParts.push({ text: `Review page ${currentPageNumber} of ${totalPages} from document "${filename}". First, extract all original text. Second, translate that extracted text to ${targetLangName}. Original text to process if clear: ###${originalPageText}###` });
+        }
+
+        const combinedRequestBody = {
+          contents: [{ parts: combinedPromptParts }],
+          generationConfig: { temperature: 0.1, topK: 1, topP: 0.1, maxOutputTokens: 8192, responseMimeType: "application/json",
+            responseSchema: { type: "OBJECT", properties: {
+              extracted_text: { type: "STRING", description: "Original text extracted/identified from the page/image." },
+              translated_text: { type: "STRING", description: `Clean and complete translation of the extracted text into ${targetLangName}.` },
+              page_info: { type: "OBJECT", properties: { has_text: { type: "BOOLEAN" }, content_type: { type: "STRING", enum: ["text", "image", "diagram", "table", "mixed", "text_only_input"] }}, required: ["has_text", "content_type"] }
+            }, required: ["extracted_text", "translated_text", "page_info"] }
+          }
+        };
+
+        console.log(`   🌐 Attempting Combined Ext/Trans for page ${currentPageNumber} (job ${job.id}) using ${geminiModel}...`);
+        processingStartTime = Date.now();
+        const combinedResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(combinedRequestBody), signal: AbortSignal.timeout(90000)
+        });
+        const combinedResponseTime = Date.now() - processingStartTime;
+
+        if (combinedResponse.ok) {
+          const combinedResultJson = await combinedResponse.json() as GeminiResponse;
+          const combinedStructResponse = combinedResultJson.candidates?.[0]?.content?.parts?.[0]?.text;
+          const parsed = tryParseJSON(combinedStructResponse, currentPageNumber, job.id, "Combined");
+          if (parsed && parsed.extracted_text && parsed.translated_text) {
+            finalExtractedText = parsed.extracted_text;
+            finalTranslatedText = parsed.translated_text;
+            pageNotes += ` | Combined SUCCESS (${combinedResponseTime}ms). Content: ${parsed.page_info?.content_type || 'unknown'}.`;
+            attemptSuccess = true;
+          } else {
+            pageNotes += ` | Combined ParseFAIL/MissingFields (${combinedResponseTime}ms). Raw: ${combinedStructResponse ? combinedStructResponse.substring(0,100) + '...': 'NO_RESPONSE_TEXT'}`; 
+          }
+        } else {
+          const errorText = await combinedResponse.text();
+          console.error(`   ❌ Combined Ext/Trans API error page ${currentPageNumber} (job ${job.id}):`, combinedResponse.status, errorText.substring(0,200));
+          pageNotes += ` | Combined API Error: ${combinedResponse.status} (${combinedResponseTime}ms).`;
+        }
+
+        // --- Fallback: Separate Extraction and Translation if Combined failed ---
+        if (!attemptSuccess) {
+          console.warn(`   ⚠️ Combined Ext/Trans failed for page ${currentPageNumber}. Attempting fallback...`);
+          pageNotes += ` | Fallback Initiated.`;
+
+          // Step 1: Extract Text Only
+          const extractParts: any[] = [{ inlineData: { mimeType: "image/png", data: pageImageBase64.split(',')[1] } }];
+          extractParts.push({ text: `Extract ALL text content from this image (page ${currentPageNumber}/${totalPages} of document "${filename}"). Provide only the extracted text.` });
+          
+          const extractRequestBody = {
+            contents: [{ parts: extractParts }],
+            generationConfig: { temperature: 0.0, topK: 1, maxOutputTokens: 4096, responseMimeType: "application/json",
+              responseSchema: { type: "OBJECT", properties: { extracted_text: { type: "STRING", description: "All text content extracted from the image." } }, required: ["extracted_text"] }
+            }
+          };
+          console.log(`     Fallback Step 1: Extracting text for page ${currentPageNumber} using ${geminiModel}...`);
+          const extractStartTime = Date.now();
+          const extractResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(extractRequestBody), signal: AbortSignal.timeout(60000)
+          });
+          const extractResponseTime = Date.now() - extractStartTime;
+
+          let extractedTextForFallback: string | null = null;
+          if (extractResponse.ok) {
+            const extractResultJson = await extractResponse.json() as GeminiResponse;
+            const extractStructResponse = extractResultJson.candidates?.[0]?.content?.parts?.[0]?.text;
+            const parsedExtract = tryParseJSON(extractStructResponse, currentPageNumber, job.id, "Extract-Fallback");
+            if (parsedExtract && parsedExtract.extracted_text) {
+              extractedTextForFallback = parsedExtract.extracted_text;
+              finalExtractedText = extractedTextForFallback!; // Update with potentially better extraction, assert non-null
+              pageNotes += ` | FB-Extract SUCCESS (${extractResponseTime}ms).`;
+            } else { pageNotes += ` | FB-Extract ParseFAIL (${extractResponseTime}ms). Raw: ${extractStructResponse ? extractStructResponse.substring(0,100) + '...': 'NO_RESPONSE_TEXT'}`; }
+          } else { 
+            const errorText = await extractResponse.text();
+            console.error(`     ❌ Fallback Extract API error page ${currentPageNumber}:`, extractResponse.status, errorText.substring(0,200));
+            pageNotes += ` | FB-Extract API Error: ${extractResponse.status} (${extractResponseTime}ms).`; 
+          }
+
+          // Step 2: Translate Extracted Text (if extraction was successful and produced text)
+          if (extractedTextForFallback !== null && extractedTextForFallback.trim().length > 0) {
+            // After this check, extractedTextForFallback is definitely a non-empty string.
+            const textToUseInPrompt: string = extractedTextForFallback;
+
+            const translateParts: any[] = [{ text: `Translate the following text accurately to ${targetLangName}. Preserve the original meaning and structure where possible. Text to translate: ###${textToUseInPrompt}###` }];
+            const translateRequestBody = {
+              contents: [{ parts: translateParts }],
+              generationConfig: { temperature: 0.1, topK: 1, maxOutputTokens: 4096, responseMimeType: "application/json",
+                responseSchema: { type: "OBJECT", properties: { translated_text: { type: "STRING", description: `Clean and complete translation into ${targetLangName}.` } }, required: ["translated_text"] }
+              }
+            };
+            console.log(`     Fallback Step 2: Translating text for page ${currentPageNumber} using ${geminiModel}...`);
+            const translateStartTime = Date.now();
+            const translateResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(translateRequestBody), signal: AbortSignal.timeout(60000)
+            });
+            const translateResponseTime = Date.now() - translateStartTime;
+
+            if (translateResponse.ok) {
+              const translateResultJson = await translateResponse.json() as GeminiResponse;
+              const translateStructResponse = translateResultJson.candidates?.[0]?.content?.parts?.[0]?.text;
+              const parsedTranslate = tryParseJSON(translateStructResponse, currentPageNumber, job.id, "Translate-Fallback");
+              if (parsedTranslate && parsedTranslate.translated_text) {
+                finalTranslatedText = parsedTranslate.translated_text;
+                pageNotes += ` | FB-Translate SUCCESS (${translateResponseTime}ms).`;
+                attemptSuccess = true; // Mark overall success if fallback translation worked
+              } else { pageNotes += ` | FB-Translate ParseFAIL (${translateResponseTime}ms). Raw: ${translateStructResponse ? translateStructResponse.substring(0,100) + '...': 'NO_RESPONSE_TEXT'}`; }
+            } else { 
+              const errorText = await translateResponse.text();
+              console.error(`     ❌ Fallback Translate API error page ${currentPageNumber}:`, translateResponse.status, errorText.substring(0,200));
+              pageNotes += ` | FB-Translate API Error: ${translateResponse.status} (${translateResponseTime}ms).`; 
+            }
+          } else if (extractedTextForFallback === null) {
+            pageNotes += ` | FB-Translate SKIPPED (extraction failed).`;
+            finalTranslatedText = imageOnly ? "[Image, no text from failed extraction fallback]" : "[No text from failed extraction fallback]";
+          } else if (extractedTextForFallback.trim().length === 0) {
+             pageNotes += ` | FB-Translate SKIPPED (no text content found by extraction).`;
+             finalTranslatedText = imageOnly ? "[Image, no text content found by fallback extraction]" : "[No text content found by fallback extraction]";
+          }
+        }
+        
+        if (!attemptSuccess) {
+            finalTranslatedText = finalTranslatedText === "[Translation pending]" ? "[Translation failed after all attempts]" : finalTranslatedText;
+            if (finalExtractedText === "[Image text to be extracted by Gemini]" && imageOnly) finalExtractedText = "[Image, text extraction failed]"
+        }
+
+        const pageResult: TranslationResult = {
+          page_number: currentPageNumber,
+          original_text: finalExtractedText,
+          translated_text: finalTranslatedText,
+          page_image: pageImageBase64,
+          notes: pageNotes.trim()
+        };
+        allPageResults.push(pageResult);
+
+        console.log(`   ✅ Page ${currentPageNumber}/${totalPages} processing completed for job ${job.id}. Notes: ${pageNotes}`);
+        const progress = Math.round((currentPageNumber / totalPages) * 100);
         await job.updateProgress(progress);
       }
 
-      return {
-        status: 'completed',
-        results
-      };
-    } catch (error) {
-      console.error('Translation job failed:', error);
-      throw error;
+      console.log(`✅ PDF "${filename}" (job ${job.id}) processing finished. ${allPageResults.length} pages handled.`);
+      await job.updateProgress(100);
+      return allPageResults;
+
+    } catch (error: any) {
+      console.error(`❌❌ Overall PDF translation job ${job.id} ("${filename}") failed catastrophically:`, error.message, error.stack);
+      const finalErrorMessage = error.message || 'Worker job for PDF failed with an unhandled error';
+      await job.updateProgress(job.progress || 0); 
+      await job.moveToFailed(new Error(finalErrorMessage), 'worker-error-queue', true);
+      throw error; 
     }
   },
-  { 
+  {
     connection,
-    concurrency: 1 // Process one job at a time
+    concurrency: process.env.WORKER_CONCURRENCY ? parseInt(process.env.WORKER_CONCURRENCY) : 1, 
+    limiter: { max: 100, duration: 1000 } 
   }
 );
 
-// Helper function to process a single page
-async function processPage(
-  fileData: {
-    name: string;
-    type: string;
-    size: number;
-    buffer: string;
-  },
-  pageNumber: number,
-  targetLanguage: string,
-  totalPages: number
-) {
-  // Convert base64 back to buffer
-  const buffer = Buffer.from(fileData.buffer, 'base64');
-
-  const requestBody = {
-    contents: [{
-      parts: [{
-        text: `Please translate this text to ${targetLanguage} while preserving the original structure, formatting, and meaning. 
-               Maintain any special formatting, bullet points, headers, etc.
-               
-               Text to translate:
-               ${fileData.name} - Page ${pageNumber} of ${totalPages}`
-      }]
-    }],
-    generationConfig: {
-      temperature: 0.1,
-      topK: 1,
-      topP: 0.1,
-      maxOutputTokens: 8192,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: "OBJECT",
-        properties: {
-          extracted_text: {
-            type: "STRING",
-            description: "All text content extracted from the image, preserving original structure"
-          },
-          translated_text: {
-            type: "STRING", 
-            description: "Clean translation of the extracted text with no analysis or commentary"
-          },
-          page_info: {
-            type: "OBJECT",
-            properties: {
-              has_text: { type: "BOOLEAN" },
-              content_type: { 
-                type: "STRING",
-                enum: ["text", "image", "diagram", "table", "mixed"]
-              }
-            },
-            required: ["has_text", "content_type"]
-          }
-        },
-        required: ["extracted_text", "translated_text", "page_info"]
-      }
-    }
-  };
-
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent?key=${process.env.GOOGLE_API_KEY}`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(45000)
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Translation failed for page ${pageNumber}: ${response.status}`);
-  }
-
-  const result = await response.json() as GeminiResponse;
-  const structuredResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (!structuredResponse) {
-    throw new Error(`No structured response received for page ${pageNumber}`);
-  }
-
-  let parsedResult;
-  try {
-    parsedResult = JSON.parse(structuredResponse);
-  } catch (parseError) {
-    throw new Error(`Failed to parse structured response for page ${pageNumber}`);
-  }
-
-  const { extracted_text, translated_text, page_info } = parsedResult;
-
-  return {
-    page_number: pageNumber,
-    original_text: extracted_text || '[No text extracted]',
-    translated_text: translated_text || '[No translation available]',
-    page_image: '', // TODO: Add image processing
-    notes: `Processed with structured output - Content: ${page_info?.content_type || 'unknown'}`
-  };
-}
-
-// Handle worker events
-worker.on('completed', (job) => {
-  console.log(`Job ${job.id} completed`);
+worker.on('completed', (job: Job<PdfTranslationJobData, TranslationResult[]>, result: TranslationResult[]) => {
+  console.log(`🎉 Job ${job.id} for "${job.data.file.name}" completed with ${result.length} page results.`);
 });
 
 worker.on('failed', (job, err) => {
-  console.error(`Job ${job?.id} failed:`, err);
+  console.error(`🔥 Job ${job?.id} for "${job?.data.file.name}" failed overall:`, err.message, err.stack);
 });
 
-// Handle process termination
+worker.on('progress', (job, progress) => {
+  console.log(`📈 Job ${job.id} for "${job.data.file.name}" progress: ${progress}%`);
+});
+
 process.on('SIGTERM', async () => {
-  console.log('SIGTERM received. Closing worker...');
+  console.log(' SIGTERM received. Closing worker...');
   await worker.close();
   process.exit(0);
 });
 
-console.log('Translation worker started'); 
+process.on('SIGINT', async () => {
+  console.log(' SIGINT received. Closing worker...');
+  await worker.close();
+  process.exit(0);
+});
+
+console.log('✨ PDF Translation Worker (v2.1 with fallback & tiering) started successfully ✨'); 
