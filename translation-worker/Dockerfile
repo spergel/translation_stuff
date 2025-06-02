@@ -13,6 +13,7 @@ WORKDIR /app
 # Set environment variables for pdfjs-serverless
 ENV PDFJS_SERVERLESS_LEGACY=true
 ENV PDFJS_SERVERLESS_PLATFORM=node
+ENV NODE_ENV=production
 
 # Copy package files
 COPY package*.json ./
