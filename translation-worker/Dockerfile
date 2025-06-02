@@ -19,7 +19,7 @@ WORKDIR /app
 # Set environment variables for various packages
 ENV PDFJS_SERVERLESS_LEGACY=true
 ENV PDFJS_SERVERLESS_PLATFORM=node
-ENV NODE_ENV=production
+# DO NOT SET NODE_ENV=production HERE for the builder stage
 # Sharp environment variables
 ENV SHARP_IGNORE_GLOBAL_LIBVIPS=true
 # Build optimization
@@ -28,15 +28,15 @@ ENV NODE_OPTIONS="--max-old-space-size=4096"
 # Copy package files
 COPY package*.json ./
 
-# Install ALL dependencies (including dev) for building
+# Install ALL dependencies (including devDependencies)
+# This will install TypeScript from devDependencies
 RUN npm install && \
-    npm install --save-dev @types/node typescript ts-node && \
     npm cache clean --force
 
 # Copy source
 COPY . .
 
-# Build TypeScript using npm script
+# Build TypeScript using npm script (which runs "tsc")
 RUN npm run build
 
 # Production stage
@@ -53,7 +53,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Set environment variables
+# Set environment variables for PRODUCTION
 ENV NODE_ENV=production
 ENV PDFJS_SERVERLESS_LEGACY=true
 ENV PDFJS_SERVERLESS_PLATFORM=node
@@ -61,8 +61,11 @@ ENV SHARP_IGNORE_GLOBAL_LIBVIPS=true
 
 # Copy built files and production dependencies
 COPY --from=builder /app/dist ./dist
+# We need to copy node_modules from the builder stage that has ALL dependencies
+# then prune for production.
 COPY --from=builder /app/node_modules ./node_modules
 COPY package*.json ./
+RUN npm prune --production
 
 # Start the worker
 CMD ["node", "dist/index.js"] 
