@@ -10,9 +10,9 @@ import { finished } from 'stream/promises'; // For awaiting stream completion
 
 // Cast pdfjs-serverless import to any to bypass type checking for this module
 import * as PdfJsLibUntyped from 'pdfjs-serverless';
+import { convert } from 'pdf-poppler';
+import sharp from 'sharp';
 const PdfJsLib: any = PdfJsLibUntyped;
-
-import { createCanvas, Canvas, CanvasRenderingContext2D } from 'canvas'; // For rendering PDF pages to images
 
 // Initialize serverless environment polyfills for the worker
 initializeWorkerEnvironment();
@@ -71,13 +71,32 @@ interface PdfTranslationJobData {
   userTier?: string; 
 }
 
-// Helper: Render a PDF page to a PNG data URI
-async function renderPageToImage(page: any /* PDFPageProxy */): Promise<string> {
-  const viewport = page.getViewport({ scale: 1.5 }); 
-  const canvas = createCanvas(viewport.width, viewport.height) as unknown as Canvas;
-  const context = canvas.getContext('2d') as unknown as CanvasRenderingContext2D;
-  await page.render({ canvasContext: context, viewport: viewport }).promise;
-  return canvas.toDataURL('image/png');
+// Helper: Render a PDF page to a PNG data URI using pdf-poppler and sharp
+async function renderPageToImage(pdfPath: string, pageNumber: number): Promise<string> {
+  const outputDir = path.dirname(pdfPath);
+  const outputPrefix = path.join(outputDir, `page-${pageNumber}`);
+  
+  // Convert PDF page to PNG using pdf-poppler
+  await convert(pdfPath, {
+    out_dir: outputDir,
+    out_prefix: `page-${pageNumber}`,
+    page: pageNumber,
+    format: 'png',
+    scale: 1.5
+  });
+
+  // Read the generated PNG and convert to base64 using sharp
+  const pngPath = `${outputPrefix}-1.png`;
+  const imageBuffer = await fsp.readFile(pngPath);
+  const base64Image = await sharp(imageBuffer)
+    .resize(1500, null, { withoutEnlargement: true })
+    .toBuffer()
+    .then(buffer => `data:image/png;base64,${buffer.toString('base64')}`);
+
+  // Clean up the temporary PNG file
+  await fsp.unlink(pngPath);
+
+  return base64Image;
 }
 
 // Helper: Robust JSON parsing
@@ -192,7 +211,7 @@ const worker = new Worker<
         const page: any /* PDFPageProxy */ = await pdfDocument.getPage(currentPageNumber);
         const textContent = await page.getTextContent();
         const originalPageText = textContent.items.map((item: any) => item.str).join(' \n');
-        const pageImageBase64 = await renderPageToImage(page);
+        const pageImageBase64 = await renderPageToImage(workerTempFilePath, currentPageNumber);
         const imageOnly = originalPageText.trim().length < 20;
         
         pageNotes += ` Mode: ${imageOnly ? 'Image-Only' : 'Text+Image'}.`;

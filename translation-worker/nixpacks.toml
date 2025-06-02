@@ -10,30 +10,14 @@ nixPkgs = [
   "gcc",             # GNU Compiler Collection (for C/C++)
   "gnumake",         # make utility
   "pkg-config",      # Helper tool used when compiling applications and libraries
-  "cairo",           # Graphics library
-  "pango",           # Library for layout and rendering of text
-  "libjpeg",         # JPEG image compression library
-  "giflib",          # GIF image format library
-  "librsvg",         # SVG rendering library
   "nodejs",          # Node.js (includes npm)
   "python3",         # Python 3 for node-gyp
   "which",           # For `which python3` command
-  "pixman",          # Low-level pixel manipulation library
-  "freetype",        # Font rendering library
-  "fontconfig",      # Font configuration and customization library
-  "libpng",          # PNG image format library
+  "poppler_utils",   # Poppler utilities
   "zlib",            # Data compression library
-  "xorg.libX11",      # X11 library
-  "xorg.libXext",     # X11 extension library
-  "xorg.libXrender",  # X11 rendering library
-  "xorg.libXtst",     # X11 test library
-  "xorg.libXi",       # X11 input library
-  "glib",            # General-purpose library
-  "harfbuzz",        # Font shaping library
-  "expat",           # XML parser library
-  "libffi"           # Foreign Function Interface library
-  # Sometimes development headers are in separate .dev or .lib packages in Nix
-  # e.g., "cairo.dev", "pango.dev". For now, trying the base names.
+  "libpng",          # PNG image format library
+  "libjpeg",         # JPEG image compression library
+  "giflib"           # GIF image format library
 ]
 
 # The top-level aptPkgs might not be the preferred way for Railway's Nixpacks if [phases.setup].nixPkgs is used.
@@ -52,19 +36,6 @@ cmds = [
   "export PYTHON=/root/.nix-profile/bin/python3",
   "export PYTHON_COMMAND_PATH=/root/.nix-profile/bin/python3",
   "export npm_config_build_from_source=true",
-  "export npm_config_canvas_binary_host_mirror=https://registry.npmmirror.com/-/binary/canvas",
-  "export npm_config_canvas_build_from_source=true",
-  "export npm_config_canvas_use_system_libs=true",
-  "export npm_config_canvas_use_system_cairo=true",
-  "export npm_config_canvas_use_system_pango=true",
-  "export npm_config_canvas_use_system_pixman=true",
-  "export npm_config_canvas_use_system_freetype=true",
-  "export npm_config_canvas_use_system_fontconfig=true",
-  "export npm_config_canvas_use_system_libpng=true",
-  "export npm_config_canvas_use_system_zlib=true",
-  "export npm_config_canvas_use_system_jpeg=true",
-  "export npm_config_canvas_use_system_gif=true",
-  "export npm_config_canvas_use_system_svg=true",
   "echo 'Running npm install...'",
   "npm install --verbose"
 ]
