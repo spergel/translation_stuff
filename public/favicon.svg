@@ -1,0 +1,26 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle with warm brown -->
+  <circle cx="16" cy="16" r="16" fill="#5D4037"/>
+  
+  <!-- Document icon -->
+  <rect x="7" y="6" width="12" height="15" rx="1" fill="#f8f5f0" stroke="#8D6E63" stroke-width="0.5"/>
+  
+  <!-- Text lines representing original text -->
+  <rect x="9" y="8" width="8" height="1" rx="0.5" fill="#8D6E63"/>
+  <rect x="9" y="10" width="6" height="1" rx="0.5" fill="#8D6E63"/>
+  <rect x="9" y="12" width="7" height="1" rx="0.5" fill="#8D6E63"/>
+  
+  <!-- Translation arrow -->
+  <path d="M11 15 L13 17 L11 19" stroke="#4E342E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  
+  <!-- Text lines representing translated text -->
+  <rect x="9" y="17" width="8" height="1" rx="0.5" fill="#4E342E"/>
+  <rect x="9" y="19" width="5" height="1" rx="0.5" fill="#4E342E"/>
+  
+  <!-- Small AI/sparkle indicator -->
+  <circle cx="18" cy="8" r="1.5" fill="#FF9800"/>
+  <path d="M18 6.5 L18.5 7.5 L17.5 7.5 Z" fill="#f8f5f0"/>
+  <path d="M19.5 8 L18.5 8.5 L18.5 7.5 Z" fill="#f8f5f0"/>
+  <path d="M18 9.5 L17.5 8.5 L18.5 8.5 Z" fill="#f8f5f0"/>
+  <path d="M16.5 8 L17.5 7.5 L17.5 8.5 Z" fill="#f8f5f0"/>
+</svg> 

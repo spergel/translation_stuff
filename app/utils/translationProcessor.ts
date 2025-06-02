@@ -148,6 +148,7 @@ export async function processSinglePage(
   pageNum: number,
   targetLanguage: string,
   totalPages: number,
+  userTier: string = 'free',
   clientImages?: Record<number, string>, // Add client images parameter
   progressCallback?: (progress: number, message: string) => void
 ): Promise<TranslationResult> {
@@ -286,7 +287,10 @@ ${pdfDescription.includes('full PDF') ? `IMPORTANT: This PDF contains multiple p
   console.log(`📋 Expected JSON schema: page_number, original_text, translated_text`)
 
   const translationPromise = (async () => {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent?key=${process.env.GOOGLE_API_KEY}`, {
+    const modelName = getModelForTier(userTier)
+    console.log(`🤖 Using model ${modelName} for ${userTier} tier`)
+
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${process.env.GOOGLE_API_KEY}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -403,7 +407,10 @@ Respond with valid JSON in this exact format:
 }`
 
       try {
-        const retryResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent?key=${process.env.GOOGLE_API_KEY}`, {
+        const modelName = getModelForTier(userTier)
+        console.log(`🤖 Retry using model ${modelName} for ${userTier} tier`)
+
+        const retryResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${process.env.GOOGLE_API_KEY}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
@@ -509,7 +516,7 @@ export async function processBatchOfPages(
   try {
     // Process all pages in this batch concurrently
     const batchPromises = pageNumbers.map(pageNum => 
-      processSinglePage(originalPdfBytes, pageNum, targetLanguage, totalPages, clientImages, (pageProgress, pageMessage) => {
+      processSinglePage(originalPdfBytes, pageNum, targetLanguage, totalPages, 'free', clientImages, (pageProgress, pageMessage) => {
         // Provide more granular progress updates for individual pages
         if (pageProgress >= 50) { // When a page is halfway done
           const totalCompleted = completedPagesCount + (completedInBatch + (pageProgress / 100))
@@ -782,21 +789,11 @@ export async function processIndividualPagesSplit(
           fileDataCopyForPage.set(fileData)
           console.log(`✅ Fresh copy created for page ${pageNum}: ${fileDataCopyForPage.length} bytes`)
 
-          const pageResult = await processSinglePage(fileDataCopyForPage, pageNum, targetLanguage, totalPages, clientImages, (pageProgress, pageMessage) => {
+          const pageResult = await processSinglePage(fileDataCopyForPage, pageNum, targetLanguage, totalPages, userTier, clientImages, (pageProgress, pageMessage) => {
             // Provide more granular progress updates during sequential processing
             if (pageProgress >= 25) { // Update every 25% of page progress
-              const completedPages = results.length
-              const currentPageProgress = pageProgress / 100
-              const totalCompleted = completedPages + currentPageProgress
-              const overallProgress = Math.round((totalCompleted / maxPagesToProcess) * 80) + 10
-              
-              if (pageProgress === 100) {
-                console.log(`✅ Page ${pageNum} completed: ${pageMessage}`)
-                progressCallback(overallProgress, `Completed ${pageNum}/${maxPagesToProcess} pages`)
-              } else {
-                // More frequent updates during page processing
-                progressCallback(overallProgress, `Processing page ${pageNum}/${maxPagesToProcess} (${Math.round(pageProgress)}% done)`)
-              }
+              const overallProgress = Math.floor((pageNum - 1) / maxPagesToProcess * 100)
+              progressCallback(overallProgress, pageMessage)
             }
           })
           results.push(pageResult)
@@ -1075,4 +1072,15 @@ export async function processDocumentTextOnly(
     progressCallback,
     resultCallback
   )
+}
+
+// Helper function to get the appropriate model based on user tier
+function getModelForTier(userTier: string): string {
+  switch (userTier) {
+    case 'pro':
+    case 'enterprise':
+      return 'gemini-2.0-flash'
+    default:
+      return 'gemini-1.5-flash-8b'
+  }
 } 

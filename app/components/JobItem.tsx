@@ -106,89 +106,85 @@ export default function JobItem({ job, onDelete, getAllJobs, downloadFormat }: J
             {job.status}
           </span>
         </div>
-        <div className="flex items-center space-x-2">
-          {job.status === 'completed' && job.results && (
-            <>
-              <button
-                onClick={handleSideBySideView}
-                disabled={isLoadingSideBySide}
-                className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Eye className="h-4 w-4" />
-                <span>{isLoadingSideBySide ? 'Loading...' : 'Side-by-Side'}</span>
-              </button>
-              
-              <button
-                onClick={openTranslationOnly}
-                className="flex items-center space-x-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
-              >
-                <Eye className="h-4 w-4" />
-                <span>Translation Only</span>
-              </button>
-              
-              {/* Download Dropdown Menu */}
-              <div className="relative group">
-                <button className="flex items-center space-x-1 px-3 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors">
-                  <Download className="h-4 w-4" />
-                  <span>Download {downloadFormat.toUpperCase()}</span>
-                  <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
+        <div className="flex flex-wrap gap-2 sm:flex-nowrap items-center justify-end mb-4">
+          <div className="flex items-center flex-wrap gap-2 w-full sm:w-auto justify-end">
+            {job.status === 'completed' && job.results && (
+              <>
+                <button
+                  onClick={handleSideBySideView}
+                  disabled={isLoadingSideBySide}
+                  className="btn btn-primary flex items-center space-x-1 px-3 py-2 disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto justify-center"
+                >
+                  <Eye className="h-4 w-4" />
+                  <span>{isLoadingSideBySide ? 'Loading...' : 'Side-by-Side'}</span>
                 </button>
-                
-                {/* Dropdown Menu */}
-                <div className="absolute right-0 mt-2 w-80 bg-white rounded-md shadow-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10">
-                  <div className="py-2">
-                    <div className="px-4 py-2 text-sm font-medium text-gray-700 border-b border-gray-100">
-                      Choose Download Format:
+                <button
+                  onClick={openTranslationOnly}
+                  className="btn btn-success flex items-center space-x-1 px-3 py-2 w-full sm:w-auto justify-center"
+                >
+                  <Eye className="h-4 w-4" />
+                  <span>Translation Only</span>
+                </button>
+                {/* Download Dropdown Menu */}
+                <div className="relative group w-full sm:w-auto">
+                  <button className="btn btn-accent flex items-center space-x-1 px-3 py-2 w-full sm:w-auto justify-center">
+                    <Download className="h-4 w-4" />
+                    <span>Download {downloadFormat.toUpperCase()}</span>
+                    <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  {/* Dropdown Menu */}
+                  <div className="absolute right-0 mt-2 w-full sm:w-80 bg-white rounded-md shadow-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10">
+                    <div className="py-2">
+                      <div className="px-4 py-2 text-sm font-medium text-gray-700 border-b border-gray-100">
+                        Choose Download Format:
+                      </div>
+                      <button
+                        onClick={handleDownload}
+                        className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                      >
+                        <div className="font-medium">Side-by-Side {downloadFormat === 'pdf' ? 'PDF' : 'HTML'}</div>
+                        <div className="text-xs text-gray-500">Original image with translation</div>
+                      </button>
+                      <button
+                        onClick={() => downloads.downloadOriginalNextToTranscription(job)}
+                        className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                      >
+                        <div className="font-medium">Original + Transcription HTML</div>
+                        <div className="text-xs text-gray-500">Original image with transcribed text</div>
+                      </button>
+                      <button
+                        onClick={() => downloads.downloadOriginalTranscriptionTranslation(job)}
+                        className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                      >
+                        <div className="font-medium">Original + Transcription + Translation HTML</div>
+                        <div className="text-xs text-gray-500">Complete three-column analysis</div>
+                      </button>
                     </div>
-                    
-                    <button
-                      onClick={handleDownload}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                    >
-                      <div className="font-medium">Side-by-Side {downloadFormat === 'pdf' ? 'PDF' : 'HTML'}</div>
-                      <div className="text-xs text-gray-500">Original image with translation</div>
-                    </button>
-                    
-                    <button
-                      onClick={() => downloads.downloadOriginalNextToTranscription(job)}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                    >
-                      <div className="font-medium">Original + Transcription HTML</div>
-                      <div className="text-xs text-gray-500">Original image with transcribed text</div>
-                    </button>
-                    
-                    <button
-                      onClick={() => downloads.downloadOriginalTranscriptionTranslation(job)}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                    >
-                      <div className="font-medium">Original + Transcription + Translation HTML</div>
-                      <div className="text-xs text-gray-500">Complete three-column analysis</div>
-                    </button>
                   </div>
                 </div>
-              </div>
-            </>
-          )}
-          {/* Show cancel button for active jobs */}
-          {(job.status === 'processing' || job.status === 'uploading') && (
-            <button
-              onClick={() => onDelete(job.id)}
-              className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
-            >
-              Cancel
-            </button>
-          )}
-          {/* Show delete button for completed/error jobs */}
-          {(job.status === 'completed' || job.status === 'error' || job.status === 'cancelled') && (
-            <button
-              onClick={() => onDelete(job.id)}
-              className="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition-colors"
-            >
-              Delete
-            </button>
-          )}
+              </>
+            )}
+            {/* Show cancel button for active jobs */}
+            {(job.status === 'processing' || job.status === 'uploading') && (
+              <button
+                onClick={() => onDelete(job.id)}
+                className="btn btn-error px-3 py-1 text-sm w-full sm:w-auto justify-center"
+              >
+                Cancel
+              </button>
+            )}
+            {/* Show delete button for completed/error jobs */}
+            {(job.status === 'completed' || job.status === 'error' || job.status === 'cancelled') && (
+              <button
+                onClick={() => onDelete(job.id)}
+                className="btn btn-secondary px-3 py-1 text-sm w-full sm:w-auto justify-center"
+              >
+                Delete
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

@@ -8,6 +8,7 @@ const nextConfig = {
   // Increase memory limit for serverless functions processing large PDFs
   serverRuntimeConfig: {
     maxDuration: 300, // 5 minutes max for PDF processing
+    redisConnectionString: process.env.REDIS_CONNECTION_STRING,
   },
   
   webpack: (config, { isServer }) => {

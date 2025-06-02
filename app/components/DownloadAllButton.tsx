@@ -7,10 +7,11 @@ import { useDownloads } from '../hooks/useDownloads'
 
 interface DownloadAllButtonProps {
   jobs: TranslationJob[]
-  downloadFormat: 'pdf' | 'html'
+  format: 'pdf' | 'html'
+  className?: string
 }
 
-export default function DownloadAllButton({ jobs, downloadFormat }: DownloadAllButtonProps) {
+export default function DownloadAllButton({ jobs, format, className = "btn btn-primary" }: DownloadAllButtonProps) {
   const downloads = useDownloads()
 
   const completedJobs = jobs.filter(job => 
@@ -22,7 +23,7 @@ export default function DownloadAllButton({ jobs, downloadFormat }: DownloadAllB
   }
 
   const handleDownloadAll = () => {
-    if (downloadFormat === 'pdf') {
+    if (format === 'pdf') {
       downloads.downloadAllAsPDF(jobs)
     } else {
       downloads.downloadAllAsHTML(jobs, 'original_translation')
@@ -32,10 +33,10 @@ export default function DownloadAllButton({ jobs, downloadFormat }: DownloadAllB
   return (
     <button 
       onClick={handleDownloadAll}
-      className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+      className={className}
     >
       <Download className="h-4 w-4" />
-      <span>Download All {downloadFormat.toUpperCase()} ({completedJobs.length})</span>
+      <span>Download All {format.toUpperCase()} ({completedJobs.length})</span>
     </button>
   )
 } 

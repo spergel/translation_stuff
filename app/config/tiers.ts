@@ -18,7 +18,7 @@ export const TIER_CONFIGS: Record<string, TierConfig> = {
     name: 'Free',
     maxPages: 50, // Increased from 20 (per chunk limit)
     batchSize: 5, // Increased from 2 for better performance
-    maxFileSize: 10,
+    maxFileSize: 25,
     priority: 'low',
     monthlyPageLimit: 100, // 100 pages per month
     subscriptionPrice: 0,

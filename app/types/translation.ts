@@ -27,7 +27,7 @@ export interface TranslationMetadata {
 export interface TranslationJob {
   id: string
   filename: string
-  status: 'uploading' | 'processing' | 'completed' | 'error' | 'cancelled'
+  status: 'uploading' | 'processing' | 'completed' | 'error' | 'cancelled' | 'queued'
   progress: number
   originalFile?: File
   results?: TranslationResult[]
@@ -37,6 +37,8 @@ export interface TranslationJob {
   abortController?: AbortController
   metadata?: TranslationMetadata
   statusMessage?: string
+  documentId?: string
+  queueJobId?: string
 }
 
 export type UserTier = 'free' | 'basic' | 'pro' | 'enterprise'

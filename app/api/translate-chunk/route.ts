@@ -212,9 +212,25 @@ export async function POST(request: NextRequest) {
       parsedResult = JSON.parse(structuredResponse)
     } catch (parseError) {
       console.error(`❌ Failed to parse structured response for page ${pageNumber}:`, parseError)
-      return NextResponse.json({ 
-        error: `Failed to parse structured response for page ${pageNumber}` 
-      }, { status: 500 })
+      console.error('Broken structuredResponse:', structuredResponse?.slice(0, 500) + (structuredResponse?.length > 500 ? '... (truncated)' : ''))
+      // Try to trim to last closing brace
+      let fixed = structuredResponse
+      const lastBrace = fixed.lastIndexOf('}')
+      if (lastBrace !== -1) {
+        fixed = fixed.slice(0, lastBrace + 1)
+        try {
+          parsedResult = JSON.parse(fixed)
+          console.warn('✅ Successfully parsed after trimming to last }')
+        } catch (e2) {
+          return NextResponse.json({ 
+            error: `Failed to parse structured response for page ${pageNumber} (even after trimming)` 
+          }, { status: 500 })
+        }
+      } else {
+        return NextResponse.json({ 
+          error: `Failed to parse structured response for page ${pageNumber} (no closing brace)` 
+        }, { status: 500 })
+      }
     }
 
     const { extracted_text, translated_text, page_info } = parsedResult

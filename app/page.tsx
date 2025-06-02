@@ -2,42 +2,61 @@
 
 import React, { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Upload, Trash2 } from 'lucide-react'
+import { Upload, Trash2, Lock, Save, User, Check, CreditCard } from 'lucide-react'
+import { useSession } from 'next-auth/react'
 import { extractImagesFromPDF } from './utils/pdfUtils'
 import { TranslationResult, TranslationJob, TranslationMetadata } from './types/translation'
 import JobItem from './components/JobItem'
 import DownloadAllButton from './components/DownloadAllButton'
 import { processDocumentChunked } from './utils/chunkedTranslation'
+import FileStorageManager from './utils/fileStorage'
 import { TargetLanguage, UserTier } from './types/translation'
 import JobQueue from './components/JobQueue'
 import TranslationSettings from './components/TranslationSettings'
+import Header from './components/Header'
+import LoginButton from './components/auth/LoginButton'
+import Link from 'next/link'
+import { SUBSCRIPTION_PLANS } from './lib/stripe'
 
 export default function Home() {
+  const { data: session, status } = useSession()
   const [jobs, setJobs] = useState<TranslationJob[]>([])
   const [selectedLanguage, setSelectedLanguage] = useState<TargetLanguage>('english')
-  const [userTier, setUserTier] = useState<UserTier>('enterprise')
-  const [globalDownloadFormat, setGlobalDownloadFormat] = useState<'pdf' | 'html'>('pdf') // Global PDF/HTML toggle
+  const [globalDownloadFormat, setGlobalDownloadFormat] = useState<'pdf' | 'html'>('pdf')
+  const [showSavePrompt, setShowSavePrompt] = useState(false)
+
+  // Get user tier from session, fallback to free for anonymous users
+  const userTier: UserTier = (session?.user?.tier as UserTier) || 'free'
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    // Check file limits based on tier
+    // File limits for anonymous users (more restrictive)
     const tierLimits = {
-      free: { maxFiles: 1, maxSizeMB: 10 },
-      basic: { maxFiles: 3, maxSizeMB: 50 },
+      free: { maxFiles: 1, maxSizeMB: 25 },
+      basic: { maxFiles: 3, maxSizeMB: 25 },
       pro: { maxFiles: 10, maxSizeMB: 100 },
-      enterprise: { maxFiles: 50, maxSizeMB: 500 }
+      enterprise: { maxFiles: 50, maxSizeMB: 2000 },
+      anonymous: { maxFiles: 1, maxSizeMB: 5 }
     }
 
-    const limits = tierLimits[userTier]
+    const limits = session?.user ? tierLimits[userTier] : tierLimits.anonymous
     
     if (acceptedFiles.length > limits.maxFiles) {
-      alert(`${userTier} tier allows maximum ${limits.maxFiles} files. Please select fewer files.`)
+      if (!session?.user) {
+        alert(`Anonymous users can translate 1 file at a time (max 5MB). Sign in for higher limits!`)
+      } else {
+        alert(`${userTier} tier allows maximum ${limits.maxFiles} files. Please select fewer files.`)
+      }
       return
     }
 
     const validFiles = acceptedFiles.filter(file => {
       const sizeMB = file.size / (1024 * 1024)
       if (sizeMB > limits.maxSizeMB) {
-        alert(`File "${file.name}" (${Math.round(sizeMB)}MB) exceeds ${userTier} tier limit of ${limits.maxSizeMB}MB`)
+        if (!session?.user) {
+          alert(`File "${file.name}" (${Math.round(sizeMB)}MB) exceeds anonymous limit of ${limits.maxSizeMB}MB. Sign in for higher limits!`)
+        } else {
+          alert(`File "${file.name}" (${Math.round(sizeMB)}MB) exceeds ${userTier} tier limit of ${limits.maxSizeMB}MB`)
+        }
         return false
       }
       return true
@@ -58,118 +77,163 @@ export default function Home() {
       if (!confirmed) return
     }
 
-    console.log(`📁 Processing ${validFiles.length} files for ${userTier} tier (${jobs.filter(j => j.status === 'processing').length} active jobs)`)
-
-    // Check for batch processing efficiency
-    for (const file of validFiles) {
-      const sizeMB = Math.round(file.size / 1024 / 1024 * 100) / 100
-      
-      // Estimate page count based on file size (rough approximation)
-      const estimatedPages = Math.round(sizeMB * 2.3) // Rough estimate: ~2.3 pages per MB
-      
-      if (estimatedPages > 50) {
-        console.log(`📊 "${file.name}" has estimated ${estimatedPages} pages. Processing in batches for optimal performance.`)
-      }
-    }
+    console.log(`📁 Processing ${validFiles.length} files for ${session?.user ? userTier : 'anonymous'} user`)
 
     // Create all jobs first so they show immediately
-    const newJobs: TranslationJob[] = validFiles.map(file => {
+    const newJobs: TranslationJob[] = []
+
+    for (const file of validFiles) {
       const jobId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9)
       const abortController = new AbortController()
+      let documentId: string | undefined = undefined
       
-      return {
+      // Only create database record if user is authenticated
+      if (session?.user) {
+        try {
+          // Create document in database first
+          const documentResponse = await fetch('/api/documents', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              originalFilename: file.name,
+              title: file.name.replace('.pdf', ''),
+              targetLanguage: selectedLanguage,
+              originalFileSize: file.size,
+              translationSettings: {
+                extractImages: true,
+                userTier,
+              }
+            })
+          })
+
+          if (!documentResponse.ok) {
+            const error = await documentResponse.json()
+            
+            // Handle specific error codes
+            if (error.code === 'DOCUMENT_LIMIT_EXCEEDED' || error.code === 'STORAGE_LIMIT_EXCEEDED') {
+              alert(error.error)
+              continue // Skip this file but process others
+            }
+            
+            throw new Error(error.error || 'Failed to create document')
+          }
+
+          const { document } = await documentResponse.json()
+          documentId = document.id
+        } catch (error) {
+          console.error(`Failed to create document for ${file.name}:`, error)
+          alert(`Failed to start processing for ${file.name}: ${error instanceof Error ? error.message : 'Unknown error'}`)
+          continue
+        }
+      }
+        
+      // Create form data for the translation request
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('targetLanguage', selectedLanguage)
+
+      // Queue the translation job
+      try {
+        const response = await fetch('/api/translate', {
+          method: 'POST',
+          body: formData
+        })
+
+        if (!response.ok) {
+          throw new Error('Failed to queue translation job')
+        }
+
+        const { jobId: queueJobId } = await response.json()
+        
+      const job: TranslationJob = {
         id: jobId,
         filename: file.name,
-        status: 'uploading',
+          status: 'queued',
         progress: 0,
         originalFile: file,
         abortController,
-        statusMessage: 'Preparing for translation...'
+          statusMessage: 'Queued for translation...',
+          documentId,
+          queueJobId // Store the queue job ID for status updates
       }
-    })
 
-    // Add all jobs to state immediately so they show up
-    setJobs(prev => [...prev, ...newJobs])
-
-    // Now process each file
-    for (let i = 0; i < newJobs.length; i++) {
-      const job = newJobs[i]
-      const file = validFiles[i]
-
-      console.log(`📄 Starting processing for: ${file.name} (${Math.round(file.size / 1024 / 1024 * 100) / 100} MB)`)
-
-      const startTime = Date.now()
-
-      try {
-        // Use chunked processing for all files to avoid 413 errors
-        console.log(`🚀 Starting chunked processing for: ${file.name}`)
-        
-        setJobs(prev => prev.map(j => j.id === job.id ? { 
-          ...j, 
-          status: 'processing', 
-          progress: 5,
-          statusMessage: 'Using Gemini native image understanding...'
-        } : j))
-        
-        // Process document using chunked approach
-        const results = await processDocumentChunked({
-          file,
-          targetLanguage: selectedLanguage,
-          userTier,
-          onProgress: (progress, message) => {
-            setJobs(prev => prev.map(j => j.id === job.id ? {
-              ...j,
-              progress,
-              statusMessage: message
-            } : j))
-          },
-          onPageComplete: (result) => {
-            setJobs(prev => prev.map(j => j.id === job.id ? {
-              ...j,
-              results: [...(j.results || []), result].sort((a, b) => a.page_number - b.page_number)
-            } : j))
-          },
-          signal: job.abortController?.signal
-        })
-        
-        // Calculate performance metrics
-                  const endTime = Date.now()
-                  const totalTime = Math.round((endTime - startTime) / 1000)
-        const pagesCount = results.length
-                  const timePerPage = Math.round(totalTime / pagesCount * 10) / 10
-                  
-        console.log(`🎉 Chunked processing completed for ${file.name} in ${totalTime}s for ${pagesCount} pages (${timePerPage}s per page)`)
-        
-        // Update job to completed
-        setJobs(prev => prev.map(j => j.id === job.id ? {
-          ...j,
-          status: 'completed',
-                        progress: 100,
-          results,
-          totalPages: pagesCount,
-          statusMessage: `Completed ${pagesCount} pages in ${totalTime}s (${timePerPage}s/page)`
-        } : j))
-
+      newJobs.push(job)
       } catch (error) {
-        // Check if the error is due to cancellation
-        if (error instanceof Error && error.name === 'AbortError') {
-          console.log(`🛑 Translation was cancelled for job ${job.id}`)
-          setJobs(prev => prev.map(currentJob => 
-            currentJob.id === job.id 
-              ? { ...currentJob, status: 'cancelled', error: 'Translation was cancelled by user' }
-              : currentJob
-          ))
-        } else {
-          console.log(`❌ Translation failed for ${file.name}:`, error)
-          setJobs(prev => prev.map(currentJob => 
-            currentJob.id === job.id 
-              ? { ...currentJob, status: 'error', error: error instanceof Error ? error.message : 'Unknown error' }
-              : currentJob
-          ))
-        }
+        console.error(`Failed to queue translation for ${file.name}:`, error)
+        alert(`Failed to queue translation for ${file.name}: ${error instanceof Error ? error.message : 'Unknown error'}`)
+        continue
       }
     }
-  }, [selectedLanguage, userTier, jobs])
+
+    // Add all valid jobs to state immediately so they show up
+    setJobs(prev => [...prev, ...newJobs])
+
+    // Show save prompt for anonymous users after they start translation
+    if (!session?.user && newJobs.length > 0) {
+      setShowSavePrompt(true)
+    }
+
+    // Start polling for job status
+    for (const job of newJobs) {
+      if (job.queueJobId) {
+        pollJobStatus(job.queueJobId, job.id)
+      }
+    }
+  }, [selectedLanguage, userTier, session])
+
+  // Add polling function
+  const pollJobStatus = async (queueJobId: string, localJobId: string) => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/translate?jobId=${queueJobId}`)
+        if (!response.ok) {
+          throw new Error('Failed to get job status')
+        }
+
+        const { state, progress, result } = await response.json()
+
+        setJobs(prev => prev.map(job => {
+          if (job.id === localJobId) {
+            const updatedJob = { ...job }
+
+            // Update status based on queue state
+            switch (state) {
+              case 'completed':
+                updatedJob.status = 'completed'
+                updatedJob.progress = 100
+                updatedJob.results = result?.results
+                updatedJob.statusMessage = 'Translation complete!'
+                clearInterval(pollInterval)
+                break
+              case 'failed':
+                updatedJob.status = 'error'
+                updatedJob.error = result?.error || 'Translation failed'
+                clearInterval(pollInterval)
+                break
+              case 'active':
+                updatedJob.status = 'processing'
+                updatedJob.progress = progress || 0
+                updatedJob.statusMessage = 'Processing...'
+                break
+              case 'waiting':
+                updatedJob.status = 'queued'
+                updatedJob.progress = 0
+                updatedJob.statusMessage = 'Waiting to start...'
+                break
+            }
+
+            return updatedJob
+          }
+          return job
+        }))
+      } catch (error) {
+        console.error('Error polling job status:', error)
+        clearInterval(pollInterval)
+          }
+    }, 2000) // Poll every 2 seconds
+  }
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -179,38 +243,38 @@ export default function Home() {
     multiple: true
   })
 
-  const deleteJob = (jobId: string) => {
+  const deleteJob = async (jobId: string) => {
     const job = jobs.find(j => j.id === jobId)
     
     if (job?.status === 'processing' || job?.status === 'uploading') {
       // Show confirmation for active translations
-      const confirmed = window.confirm(
-        `This translation is currently ${job.status}. Are you sure you want to cancel it?\n\n` +
-        `This will stop both text translation and image extraction.`
-      )
-      
-      if (!confirmed) return
-      
-      // Cancel the ongoing request
-      if (job.abortController) {
-        job.abortController.abort()
-        console.log(`🛑 Cancelled translation for job ${jobId}`)
+      if (!confirm('This translation is in progress. Are you sure you want to cancel it?')) {
+        return
       }
-      
-      // Update job status to cancelled
-      setJobs(prev => prev.map(job => 
-        job.id === jobId 
-          ? { ...job, status: 'cancelled', error: 'Translation was cancelled by user' }
-          : job
-      ))
-    } else {
-      // For completed/error jobs, just show simple confirmation
-      const confirmed = window.confirm('Are you sure you want to delete this translation?')
-      if (!confirmed) return
+
+      // If job has a queue ID, cancel it in Redis
+      if (job.queueJobId) {
+        try {
+          const response = await fetch(`/api/translate?jobId=${job.queueJobId}`, {
+            method: 'DELETE'
+          });
+
+          if (!response.ok) {
+            throw new Error('Failed to cancel job');
+          }
+        } catch (error) {
+          console.error('Error cancelling job:', error);
+          alert('Failed to cancel job. Please try again.');
+          return;
+        }
+      }
+
+      // Abort any ongoing fetch requests
+      job.abortController?.abort()
     }
-    
-    // Remove the job from the list
-    setJobs(prev => prev.filter(job => job.id !== jobId))
+
+    // Remove job from state
+    setJobs(prev => prev.filter(j => j.id !== jobId))
   }
 
   const clearAllJobs = () => {
@@ -245,159 +309,218 @@ export default function Home() {
   const getAllJobs = () => jobs
 
   return (
-    <div className="min-h-screen bg-primary-50 py-8">
-      <div className="max-w-6xl mx-auto px-4">
-        <header className="text-center mb-12">
-          <h1 className="text-4xl font-bold text-primary-300 mb-4">
-            PDF Translator
+    <div className="min-h-screen bg-gradient-to-b from-primary-50 to-white">
+      <Header />
+      
+      <main className="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+        {/* Hero Section */}
+        <div className="text-center mb-12">
+          <h1 className="text-4xl font-bold text-primary-300 mb-4 font-serif">
+            AI-Powered PDF Translation
           </h1>
-          <p className="text-lg text-gray-600 max-w-2xl mx-auto">
+          <p className="text-lg text-primary-200 max-w-2xl mx-auto leading-relaxed font-serif">
             Upload your PDF documents and get AI-powered translations with side-by-side comparison. 
             Supports documents up to 100 pages.
           </p>
-        </header>
+        </div>
 
-        <div className="bg-white rounded-lg shadow-lg p-8 mb-8">
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Target Language
-            </label>
-            <select 
-              value={selectedLanguage}
-              onChange={(e) => setSelectedLanguage(e.target.value as TargetLanguage)}
-              className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-300 focus:border-primary-300"
-            >
-              <option value="english">English</option>
-              <option value="spanish">Spanish</option>
-              <option value="french">French</option>
-              <option value="german">German</option>
-              <option value="italian">Italian</option>
-              <option value="portuguese">Portuguese</option>
-              <option value="russian">Russian</option>
-              <option value="chinese">Chinese</option>
-              <option value="japanese">Japanese</option>
-              <option value="arabic">Arabic</option>
-            </select>
+        {/* User Status Bar - Clean single section */}
+        {!session && status !== 'loading' && (
+          <div className="mb-8">
+            <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <div className="flex-shrink-0">
+                    <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center">
+                      <User className="h-5 w-5 text-amber-600" />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-amber-900">
+                      Translating as Guest
+                    </div>
+                    <div className="text-xs text-amber-700">
+                      Limit: 1 file, 5MB max • Sign in to save your work and get higher limits
+                    </div>
+                  </div>
+                </div>
+                <LoginButton />
+              </div>
+            </div>
           </div>
+        )}
 
-          {/* SaaS Tier Selection */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Subscription Tier (Testing)
-            </label>
-            <select 
-              value={userTier}
-              onChange={(e) => setUserTier(e.target.value as UserTier)}
-              className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-300 focus:border-primary-300"
-            >
-              <option value="free">Free (50 pages, 5-page batches)</option>
-              <option value="basic">Basic (100 pages, 20-page batches)</option>
-              <option value="pro">Pro (500 pages, 50-page batches)</option>
-              <option value="enterprise">Enterprise (unlimited, 100-page batches)</option>
-            </select>
-            <p className="text-xs text-gray-500 mt-1">
-              Higher tiers process multiple pages simultaneously for faster results
-            </p>
-          </div>
-
-          <div
-            {...getRootProps()}
-            className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors ${
-              isDragActive 
-                ? 'border-primary-300 bg-primary-50' 
-                : 'border-gray-300 hover:border-primary-200'
-            }`}
-          >
-            <input {...getInputProps()} />
-            <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-            {isDragActive ? (
-              <p className="text-lg text-primary-300">Drop the PDF files here...</p>
-            ) : (
-              <div>
-                <p className="text-lg text-gray-600 mb-2">
-                  Drag & drop PDF files here, or click to select
-                </p>
-                <div className="text-sm text-gray-500 space-y-1">
-                  <p>
-                    {userTier === 'free' && 'Free tier: 1 file, 50 pages max'}
-                    {userTier === 'basic' && 'Basic tier: 2 files, 100 pages each'}
-                    {userTier === 'pro' && 'Pro tier: 5 files, 500 pages each'}
-                    {userTier === 'enterprise' && 'Enterprise tier: 10 files, unlimited pages'}
-                  </p>
-                  {(() => {
-                    const activeJobs = jobs.filter(job => 
-                      job.status === 'uploading' || job.status === 'processing'
-                    ).length
-                    const tierLimits = {
-                      free: 1,
-                      basic: 3,
-                      pro: 10,
-                      enterprise: 50
-                    }
-                    const maxFiles = tierLimits[userTier as keyof typeof tierLimits] || 1
-                    
-                    if (maxFiles === -1) {
-                      return activeJobs > 0 ? (
-                        <p className="text-blue-600">Currently processing {activeJobs} files</p>
-                      ) : null
-                    } else {
-                      return (
-                        <p className={`${activeJobs >= maxFiles ? 'text-red-600' : 'text-blue-600'}`}>
-                          Active jobs: {activeJobs}/{maxFiles}
-                          {activeJobs >= maxFiles && ' (limit reached)'}
-                        </p>
-                      )
-                    }
-                  })()}
+        {/* Save Prompt for Anonymous Users - Integrated into existing flow */}
+        {showSavePrompt && !session && (
+          <div className="mb-8">
+            <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <div className="flex-shrink-0">
+                    <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center">
+                      <Save className="h-5 w-5 text-emerald-600" />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-emerald-900">
+                      Save this translation?
+                    </div>
+                    <div className="text-xs text-emerald-700">
+                      Sign in now to save your work and access it from any device
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-3">
+                  <button
+                    onClick={() => setShowSavePrompt(false)}
+                    className="text-xs text-emerald-600 hover:text-emerald-500 font-medium"
+                  >
+                    Maybe later
+                  </button>
+                  <LoginButton />
                 </div>
               </div>
-            )}
+            </div>
+          </div>
+        )}
+
+        {/* Translation Settings */}
+        <div className="bg-white border border-amber-200 rounded-lg shadow-sm mb-8">
+          <div className="p-6">
+            <TranslationSettings
+              selectedLanguage={selectedLanguage}
+              setSelectedLanguage={setSelectedLanguage}
+              userTier={userTier}
+              setUserTier={undefined}
+              globalDownloadFormat={globalDownloadFormat}
+              setGlobalDownloadFormat={setGlobalDownloadFormat}
+            />
           </div>
         </div>
 
-        {jobs.length > 0 && (
-          <div className="space-y-6">
-            <div className="flex justify-between items-center">
-              <h2 className="text-xl font-semibold text-gray-900">
-                Translation Jobs ({jobs.length})
-              </h2>
-              <div className="flex items-center space-x-4">
-                {/* Global PDF/HTML Toggle */}
-                <div className="flex items-center space-x-2 px-3 py-2 bg-gray-100 rounded-md">
-                  <span className={`text-sm ${globalDownloadFormat === 'pdf' ? 'font-semibold text-gray-900' : 'text-gray-500'}`}>
-                    PDF
-                  </span>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={globalDownloadFormat === 'html'}
-                      onChange={(e) => setGlobalDownloadFormat(e.target.checked ? 'html' : 'pdf')}
-                      className="sr-only peer"
-                    />
-                    <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-                  </label>
-                  <span className={`text-sm ${globalDownloadFormat === 'html' ? 'font-semibold text-gray-900' : 'text-gray-500'}`}>
-                    HTML
-                  </span>
+        {/* Upload Area */}
+        <div className="bg-white border border-amber-200 rounded-lg shadow-sm mb-8">
+          <div className="p-6">
+            <div
+              {...getRootProps()}
+              className={`upload-area ${isDragActive ? 'drag-active' : ''} min-h-[200px] flex items-center justify-center border-2 border-dashed border-amber-300 rounded-lg transition-colors ${isDragActive ? 'border-amber-400 bg-amber-50' : 'hover:border-amber-400 hover:bg-amber-50/30'}`}
+            >
+              <input {...getInputProps()} />
+              <div className="text-center">
+                <Upload className="mx-auto h-12 w-12 text-amber-400 mb-4" />
+                <div className="text-lg font-medium text-primary-300 mb-2">
+                  {isDragActive ? 'Drop PDF files here' : 'Drag & drop PDF files here, or click to select'}
                 </div>
-                
-                <DownloadAllButton jobs={jobs} downloadFormat={globalDownloadFormat} />
-                <button
-                  onClick={clearAllJobs}
-                  className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  <span>Clear All</span>
-                </button>
+                {session ? (
+                  <>
+                    <div className="text-sm text-primary-200 mb-1">
+                      {userTier === 'free'
+                        ? 'Free tier: 1 file at a time, 25MB max per file'
+                        : userTier === 'basic'
+                          ? 'Basic tier: up to 3 files at a time, 25MB max per file'
+                          : userTier === 'pro'
+                            ? 'Pro tier: up to 10 files at a time, 100MB max per file'
+                            : userTier === 'enterprise'
+                              ? 'Enterprise: up to 50 files at a time, 2GB max per file'
+                              : 'Guest: 1 file, 5MB max'}
+                      {session.user.isEduEmail && <span className="ml-2 text-emerald-600">(.edu account)</span>}
+                    </div>
+                    {session && (
+                      <div className="text-xs text-primary-100">
+                        Stored: {session.user.documentsCount} of 1 documents • {Math.round(Number(session.user.storageUsedBytes) / (1024 * 1024))}MB used
+                        {userTier === 'free' && session.user.documentsCount >= 1 && (
+                          <span className="ml-2 text-amber-600">Delete old documents to upload new ones.</span>
+                        )}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-sm text-amber-600">
+                    Guest mode: 1 file, 5MB max • Translations not saved
+                  </div>
+                )}
               </div>
             </div>
+          </div>
+        </div>
 
-            {jobs.map((job) => (
-              <JobItem key={job.id} job={job} onDelete={deleteJob} getAllJobs={getAllJobs} downloadFormat={globalDownloadFormat} />
-            ))}
+        {/* Loading state */}
+        {status === 'loading' && (
+          <div className="bg-white border border-amber-200 rounded-lg shadow-sm mb-8">
+            <div className="flex items-center justify-center p-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-400"></div>
+              <span className="ml-3 text-primary-200">Loading...</span>
+            </div>
           </div>
         )}
-      </div>
+
+        {/* Job Queue */}
+        {jobs.length > 0 && (
+          <div className="space-y-6">
+            <div className="bg-white border border-amber-200 rounded-lg shadow-sm p-6">
+              {/* Show download format selection only if at least one job is completed */}
+              {jobs.some(j => j.status === 'completed') && (
+                <div className="mb-6 flex items-center space-x-6">
+                  <label className="text-sm font-medium text-primary-300">Download Format:</label>
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="downloadFormat"
+                      value="pdf"
+                      checked={globalDownloadFormat === 'pdf'}
+                      onChange={() => setGlobalDownloadFormat('pdf')}
+                      className="text-amber-500 focus:ring-amber-300 border-amber-300"
+                    />
+                    <span className="text-sm font-medium text-primary-300">PDF</span>
+                  </label>
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="downloadFormat"
+                      value="html"
+                      checked={globalDownloadFormat === 'html'}
+                      onChange={() => setGlobalDownloadFormat('html')}
+                      className="text-amber-500 focus:ring-amber-300 border-amber-300"
+                    />
+                    <span className="text-sm font-medium text-primary-300">HTML</span>
+                  </label>
+                </div>
+              )}
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="section-header mb-0">Translation Progress</h2>
+                <div className="flex items-center space-x-3">
+                  <DownloadAllButton 
+                    jobs={jobs} 
+                    format={globalDownloadFormat}
+                    className="btn btn-secondary btn-sm"
+                  />
+                  <button
+                    onClick={clearAllJobs}
+                    className="btn btn-secondary btn-sm flex items-center space-x-2"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    <span>Clear All</span>
+                  </button>
+                </div>
+              </div>
+              <JobQueue jobs={jobs} deleteJob={deleteJob} format={globalDownloadFormat} />
+            </div>
+          </div>
+        )}
+
+        {/* Pricing Section */}
+        <section className="py-24 px-4 sm:px-6 lg:px-8">
+          <div className="max-w-7xl mx-auto text-center">
+            <Link
+              href="/pricing"
+              className="inline-flex items-center text-primary-300 hover:text-primary-400 font-medium text-lg border border-amber-200 rounded-lg px-6 py-3 bg-white shadow-sm hover:bg-amber-50 transition-all duration-200"
+            >
+              <CreditCard className="h-5 w-5 mr-2" />
+              View premium pricing details
+            </Link>
+          </div>
+        </section>
+      </main>
     </div>
   )
 } 
