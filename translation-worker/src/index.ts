@@ -244,9 +244,9 @@ const worker = new Worker<
             const extractResultJson = await extractResponse.json() as GeminiResponse;
             const extractStructResponse = extractResultJson.candidates?.[0]?.content?.parts?.[0]?.text;
             const parsedExtract = tryParseJSON(extractStructResponse, currentPageNumber, job.id, "Extract-Fallback");
-            if (parsedExtract && parsedExtract.extracted_text) {
+            if (parsedExtract && parsedExtract.extracted_text && typeof parsedExtract.extracted_text === 'string') {
               extractedTextForFallback = parsedExtract.extracted_text;
-              finalExtractedText = extractedTextForFallback!; // Update with potentially better extraction, assert non-null
+              finalExtractedText = parsedExtract.extracted_text;
               pageNotes += ` | FB-Extract SUCCESS (${extractResponseTime}ms).`;
             } else { pageNotes += ` | FB-Extract ParseFAIL (${extractResponseTime}ms). Raw: ${extractStructResponse ? extractStructResponse.substring(0,100) + '...': 'NO_RESPONSE_TEXT'}`; }
           } else { 
@@ -258,7 +258,7 @@ const worker = new Worker<
           // Step 2: Translate Extracted Text (if extraction was successful and produced text)
           if (extractedTextForFallback !== null && extractedTextForFallback.trim().length > 0) {
             // After this check, extractedTextForFallback is definitely a non-empty string.
-            const textToUseInPrompt: string = extractedTextForFallback;
+            const textToUseInPrompt: string = extractedTextForFallback!;
 
             const translateParts: any[] = [{ text: `Translate the following text accurately to ${targetLangName}. Preserve the original meaning and structure where possible. Text to translate: ###${textToUseInPrompt}###` }];
             const translateRequestBody = {
@@ -326,10 +326,10 @@ const worker = new Worker<
       const finalErrorMessage = error.message || 'Worker job for PDF failed with an unhandled error';
       await job.updateProgress(job.progress || 0); 
       await job.moveToFailed(new Error(finalErrorMessage), 'worker-error-queue', true);
-      throw error; 
+      throw error;
     }
   },
-  {
+  { 
     connection,
     concurrency: process.env.WORKER_CONCURRENCY ? parseInt(process.env.WORKER_CONCURRENCY) : 1, 
     limiter: { max: 100, duration: 1000 } 
