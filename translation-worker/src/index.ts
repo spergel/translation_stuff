@@ -12,11 +12,7 @@ import sharp from 'sharp';
 
 // Configure PDF.js for Node.js environment
 const pdfjsWorkerSrc = path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.js');
-await import(pdfjsWorkerSrc);
-Object.defineProperty(pdfjsLib, 'GlobalWorkerOptions', {
-  value: { workerSrc: pdfjsWorkerSrc },
-  writable: true
-});
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc;
 
 // Load environment variables
 dotenv.config();
