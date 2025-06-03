@@ -10,14 +10,14 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Copy requirements file
+# Copy requirements file first to leverage Docker cache
 COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
-COPY src/ ./src/
+# Copy the entire project
+COPY . .
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
