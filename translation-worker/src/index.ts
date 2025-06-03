@@ -6,12 +6,12 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { Readable } from 'stream';
 import { finished } from 'stream/promises';
-import * as pdfjsLib from 'pdfjs-dist/build/pdf.js';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
 import { createCanvas } from 'canvas';
 import sharp from 'sharp';
 
 // Configure PDF.js for Node.js environment
-const pdfjsWorkerSrc = path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.js');
+const pdfjsWorkerSrc = path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.js');
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc;
 
 // Initialize PDF.js worker
