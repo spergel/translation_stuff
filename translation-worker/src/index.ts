@@ -22,6 +22,10 @@ GlobalWorkerOptions.workerSrc = path.join(__dirname, 'pdf.worker.js');
 // Disable worker for Node.js environment
 (GlobalWorkerOptions as any).disableWorker = true;
 
+// Initialize worker environment
+import { initializeWorkerEnvironment } from './worker-polyfills.js';
+initializeWorkerEnvironment();
+
 // Load environment variables
 dotenv.config();
 
