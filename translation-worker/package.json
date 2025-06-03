@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node --esm src/index.ts"
+    "dev": "ts-node --esm src/index.ts",
+    "postinstall": "cp node_modules/pdfjs-dist/legacy/build/pdf.worker.js dist/ && cp -r node_modules/pdfjs-dist/legacy/build/standard_fonts dist/"
   },
   "dependencies": {
     "bullmq": "^5.1.1",

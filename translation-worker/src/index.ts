@@ -10,9 +10,13 @@ import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
 import { convert } from 'pdf-poppler';
 import sharp from 'sharp';
 
+// Configure PDF.js for Node.js environment
+const pdfjsWorkerSrc = path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.js');
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc;
+
 // Initialize PDF.js worker
 const pdfjsWorker = await pdfjsLib.getDocument({
-  standardFontDataUrl: `node_modules/pdfjs-dist/legacy/build/standard_fonts/`
+  standardFontDataUrl: path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'standard_fonts')
 }).promise;
 
 // Load environment variables
