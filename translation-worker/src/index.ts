@@ -6,17 +6,19 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { Readable } from 'stream';
 import { finished } from 'stream/promises';
-import * as pdfjsLib from 'pdfjs-dist/build/pdf.js';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
 import { convert } from 'pdf-poppler';
 import sharp from 'sharp';
 
 // Configure PDF.js for Node.js environment
-const pdfjsWorkerSrc = path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.js');
+const pdfjsWorkerSrc = path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.js');
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc;
 
 // Initialize PDF.js worker
 const pdfjsWorker = await pdfjsLib.getDocument({
-  standardFontDataUrl: path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'standard_fonts')
+  standardFontDataUrl: path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'standard_fonts'),
+  isEvalSupported: false,
+  useSystemFonts: true
 }).promise;
 
 // Load environment variables
