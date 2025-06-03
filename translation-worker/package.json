@@ -17,12 +17,12 @@
     "node-fetch": "^3.3.2",
     "pdf-poppler": "^0.2.1",
     "pdf-parse": "^1.1.1",
-    "sharp": "^0.33.2"
-  },
-  "devDependencies": {
-    "@types/node": "^20.11.30",
+    "sharp": "^0.33.2",
     "typescript": "^5.4.2",
     "ts-node": "^10.9.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30"
   },
   "engines": {
     "node": ">=20.0.0"
