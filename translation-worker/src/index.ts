@@ -16,7 +16,6 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc;
 
 // Initialize PDF.js worker
 const pdfjsWorker = await pdfjsLib.getDocument({
-  standardFontDataUrl: path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'standard_fonts'),
   isEvalSupported: false,
   useSystemFonts: true
 }).promise;

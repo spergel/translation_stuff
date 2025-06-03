@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "dev": "ts-node --esm src/index.ts",
     "verify-pdfjs": "ls -la node_modules/pdfjs-dist/build/",
-    "copy-pdfjs": "npm run verify-pdfjs && mkdir -p dist && cp node_modules/pdfjs-dist/build/pdf.worker.js dist/ && cp -r node_modules/pdfjs-dist/build/standard_fonts dist/"
+    "copy-pdfjs": "mkdir -p dist && cp node_modules/pdfjs-dist/build/pdf.worker.js dist/"
   },
   "dependencies": {
     "bullmq": "^5.1.1",
