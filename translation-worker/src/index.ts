@@ -11,6 +11,7 @@ import pdf from 'pdf-parse';
 import { convert } from 'pdf-poppler';
 import sharp from 'sharp';
 
+console.log('=== WORKER ENTRYPOINT REACHED ===');
 // Initialize serverless environment polyfills for the worker
 initializeWorkerEnvironment();
 
