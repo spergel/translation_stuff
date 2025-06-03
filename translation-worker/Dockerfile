@@ -12,7 +12,7 @@ RUN apt-get update && \
     && apt-get clean
 
 # Copy requirements file
-COPY requirements.txt .
+COPY ./translation-worker/requirements.txt .
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
@@ -34,7 +34,7 @@ RUN apt-get update && \
 COPY --from=builder /usr/local/lib/python3.11/site-packages/ /usr/local/lib/python3.11/site-packages/
 
 # Copy application code
-COPY src/ ./src/
+COPY ./translation-worker/src/ ./src/
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
