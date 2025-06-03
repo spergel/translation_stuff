@@ -17,9 +17,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Set up PDF.js worker
-GlobalWorkerOptions.workerSrc = path.join(__dirname, 'pdf.worker.js');
+const workerPath = path.join(__dirname, 'pdf.worker.js');
+if (!fs.existsSync(workerPath)) {
+  console.error(`❌ PDF.js worker file not found at: ${workerPath}`);
+  process.exit(1);
+}
 
-// Disable worker for Node.js environment
+// Configure PDF.js for Node.js environment
+GlobalWorkerOptions.workerSrc = workerPath;
 (GlobalWorkerOptions as any).disableWorker = true;
 
 // Initialize worker environment
@@ -97,50 +102,83 @@ const languageMap: { [key: string]: string } = {
 
 // Helper: Render a PDF page to a PNG data URI using PDF.js
 async function renderPageToImage(pdfPath: string, pageNumber: number): Promise<string> {
-  const dataBuffer = await fsp.readFile(pdfPath);
-  const uint8Array = new Uint8Array(dataBuffer);
-  const pdfDoc = await getDocument({ data: uint8Array }).promise;
-  const page = await pdfDoc.getPage(pageNumber);
-  
-  const viewport = page.getViewport({ scale: 1.5 });
-  
-  const canvas = createCanvas(viewport.width, viewport.height);
-  const context = canvas.getContext('2d');
-  
-  await page.render({
-    canvasContext: context,
-    viewport: viewport
-  }).promise;
-  
-  const buffer = canvas.toBuffer('image/png');
-  
-  const optimizedBuffer = await sharp(buffer)
-    .resize(1500, null, { withoutEnlargement: true })
-    .toBuffer();
+  try {
+    console.log(`📄 Rendering page ${pageNumber} from ${pdfPath}`);
+    const dataBuffer = await fsp.readFile(pdfPath);
+    const uint8Array = new Uint8Array(dataBuffer);
+    
+    console.log('📄 Loading PDF document...');
+    const pdfDoc = await getDocument({ 
+      data: uint8Array,
+      isEvalSupported: false,
+      useSystemFonts: true
+    }).promise;
+    
+    console.log(`📄 Getting page ${pageNumber}...`);
+    const page = await pdfDoc.getPage(pageNumber);
+    
+    const viewport = page.getViewport({ scale: 1.5 });
+    
+    console.log('📄 Creating canvas...');
+    const canvas = createCanvas(viewport.width, viewport.height);
+    const context = canvas.getContext('2d');
+    
+    console.log('📄 Rendering page to canvas...');
+    await page.render({
+      canvasContext: context,
+      viewport: viewport
+    }).promise;
+    
+    console.log('📄 Converting to PNG...');
+    const buffer = canvas.toBuffer('image/png');
+    
+    console.log('📄 Optimizing image...');
+    const optimizedBuffer = await sharp(buffer)
+      .resize(1500, null, { withoutEnlargement: true })
+      .toBuffer();
 
-  return `data:image/png;base64,${optimizedBuffer.toString('base64')}`;
+    return `data:image/png;base64,${optimizedBuffer.toString('base64')}`;
+  } catch (error) {
+    console.error('❌ Error rendering page:', error);
+    throw error;
+  }
 }
 
 // Helper: Extract text from PDF using pdf.js
 async function extractTextFromPdf(pdfPath: string): Promise<string[]> {
-  const dataBuffer = await fsp.readFile(pdfPath);
-  const uint8Array = new Uint8Array(dataBuffer);
-  const pdfDoc = await getDocument({ data: uint8Array }).promise;
-  const numPages = pdfDoc.numPages;
-  const pageTexts: string[] = [];
+  try {
+    console.log(`📄 Extracting text from ${pdfPath}`);
+    const dataBuffer = await fsp.readFile(pdfPath);
+    const uint8Array = new Uint8Array(dataBuffer);
+    
+    console.log('📄 Loading PDF document...');
+    const pdfDoc = await getDocument({ 
+      data: uint8Array,
+      isEvalSupported: false,
+      useSystemFonts: true
+    }).promise;
+    
+    const numPages = pdfDoc.numPages;
+    console.log(`📄 Found ${numPages} pages`);
+    const pageTexts: string[] = [];
 
-  for (let i = 1; i <= numPages; i++) {
-    const page = await pdfDoc.getPage(i);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item: any) => item.str)
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    pageTexts.push(pageText);
+    for (let i = 1; i <= numPages; i++) {
+      console.log(`📄 Processing page ${i}/${numPages}`);
+      const page = await pdfDoc.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item: any) => item.str)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      pageTexts.push(pageText);
+    }
+
+    return pageTexts;
+  } catch (error) {
+    console.error('❌ Error extracting text:', error);
+    throw error;
   }
-
-  return pageTexts;
 }
 
 // Helper: Call Gemini API for text extraction
