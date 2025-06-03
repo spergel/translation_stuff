@@ -35,6 +35,11 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package*.json ./
 
+# Ensure PDF.js worker files are in the correct location
+RUN mkdir -p /app/dist && \
+    cp /app/node_modules/pdfjs-dist/build/pdf.worker.js /app/dist/ && \
+    cp /app/node_modules/pdfjs-dist/build/pdf.worker.min.js /app/dist/
+
 # Set environment variables
 ENV NODE_ENV=production
 

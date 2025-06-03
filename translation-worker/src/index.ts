@@ -15,8 +15,12 @@ import { fileURLToPath } from 'url';
 // Configure PDF.js for Node.js environment
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const pdfjsWorkerSrc = path.join(__dirname, 'pdf.worker.js'); // Assumes pdf.worker.js is copied to dist
-GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc;
+
+// Set up PDF.js worker
+GlobalWorkerOptions.workerSrc = path.join(__dirname, 'pdf.worker.js');
+
+// Disable worker for Node.js environment
+(GlobalWorkerOptions as any).disableWorker = true;
 
 // Load environment variables
 dotenv.config();
