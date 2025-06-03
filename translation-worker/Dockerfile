@@ -68,4 +68,5 @@ COPY package*.json ./
 RUN npm prune --production
 
 # Start the worker
+CMD ["node", "-e", "console.log('HELLO FROM CONTAINER')"]
 CMD ["node", "dist/index.js"] 
