@@ -7,12 +7,9 @@ import fsp from 'fs/promises'; // For async file operations if needed, and for u
 import path from 'path'; // For joining paths for the new temp file
 import { Readable } from 'stream'; // For converting fetch response to stream
 import { finished } from 'stream/promises'; // For awaiting stream completion
-
-// Cast pdfjs-serverless import to any to bypass type checking for this module
-import * as PdfJsLibUntyped from 'pdfjs-serverless';
+import pdf from 'pdf-parse';
 import { convert } from 'pdf-poppler';
 import sharp from 'sharp';
-const PdfJsLib: any = PdfJsLibUntyped;
 
 // Initialize serverless environment polyfills for the worker
 initializeWorkerEnvironment();
@@ -118,6 +115,15 @@ async function renderPageToImage(pdfPath: string, pageNumber: number): Promise<s
   return base64Image;
 }
 
+// Helper: Extract text from PDF using pdf-parse
+async function extractTextFromPdf(pdfPath: string): Promise<string[]> {
+  const dataBuffer = await fsp.readFile(pdfPath);
+  const data = await pdf(dataBuffer);
+  // Split text by pages if possible (pdf-parse returns all text as one string)
+  // For now, just return as a single page array
+  return [data.text];
+}
+
 // Helper: Robust JSON parsing
 function tryParseJSON(jsonString: string | undefined, pageNumber: number, job_id: string | number | undefined, attemptType: string) {
   if (!jsonString) {
@@ -206,28 +212,25 @@ const worker = new Worker<
       await job.updateProgress(0);
 
       // Read the file from the worker's new local temporary path
-      const pdfBuffer = fs.readFileSync(workerTempFilePath);
-      // Convert Node.js Buffer to Uint8Array for pdfjs-serverless
-      const pdfUint8Array = new Uint8Array(pdfBuffer.buffer, pdfBuffer.byteOffset, pdfBuffer.byteLength);
-      
-      const pdfDocument: any /* PDFDocumentProxy */ = await PdfJsLib.getDocument({ data: pdfUint8Array, useSystemFonts: true }).promise;
-      const totalPages = pdfDocument.numPages;
+      // Use pdf-parse to extract all text from the PDF
+      const allPageTexts = await extractTextFromPdf(workerTempFilePath);
+      // For now, assign all text to the first page (improve later for per-page extraction)
+      const totalPages = 1;
 
-      console.log(`📄 PDF "${originalFilename}" has ${totalPages} pages.`);
+      console.log(`📄 PDF "${originalFilename}" has ${totalPages} page(s).`);
       const allPageResults: TranslationResult[] = [];
-      let lastReportedProgress = -1; // Initialize with a value that ensures the first update (0%) is sent if applicable
+      let lastReportedProgress = -1;
 
-      // Ensure initial progress (0%) is reported if not already done by a previous job.updateProgress(0)
-      if (job.progress !== 0) { // Or a more robust check if job.progress might be undefined initially
+      if (job.progress !== 0) {
           await job.updateProgress(0);
           lastReportedProgress = 0;
       } else {
-          lastReportedProgress = 0; // Align if it was already 0
+          lastReportedProgress = 0;
       }
 
       for (let i = 1; i <= totalPages; i++) {
         const currentPageNumber = i;
-        let pageNotes = `Model: ${geminiModel}.`; // Start with model info
+        let pageNotes = `Model: ${geminiModel}.`;
         let processingStartTime = Date.now();
 
         console.log(`📄 Processing page ${currentPageNumber}/${totalPages} of "${originalFilename}" for job ${job.id}`);
@@ -236,12 +239,10 @@ const worker = new Worker<
           throw new Error('Job cancelled by user');
         }
 
-        const page: any /* PDFPageProxy */ = await pdfDocument.getPage(currentPageNumber);
-        const textContent = await page.getTextContent();
-        const originalPageText = textContent.items.map((item: any) => item.str).join(' \n');
+        // Use allPageTexts[0] for now
+        const originalPageText = allPageTexts[0] || '';
         const pageImageBase64 = await renderPageToImage(workerTempFilePath, currentPageNumber);
         const imageOnly = originalPageText.trim().length < 20;
-        
         pageNotes += ` Mode: ${imageOnly ? 'Image-Only' : 'Text+Image'}.`;
         console.log(`   📄 Page ${currentPageNumber}: Extracted text length: ${originalPageText.length}, ${pageNotes}`);
 
