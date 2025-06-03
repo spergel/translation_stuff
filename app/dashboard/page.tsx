@@ -40,6 +40,7 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null)
   const [selectedDocument, setSelectedDocument] = useState<Document | null>(null)
   const [showViewer, setShowViewer] = useState(false)
+  const [loadingOperations, setLoadingOperations] = useState<{ [key: string]: boolean }>({})
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -85,6 +86,7 @@ export default function Dashboard() {
     if (!confirmed) return
 
     try {
+      setLoadingOperations(prev => ({ ...prev, [documentId]: true }))
       const response = await fetch(`/api/documents/${documentId}`, {
         method: 'DELETE',
       })
@@ -101,17 +103,25 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Error deleting document:', err)
       alert('Failed to delete document. Please try again.')
+    } finally {
+      setLoadingOperations(prev => ({ ...prev, [documentId]: false }))
     }
   }
 
   const downloadFile = async (documentId: string, format: 'pdf' | 'html') => {
     try {
+      setLoadingOperations(prev => ({ ...prev, [`${documentId}-${format}`]: true }))
       // Open download in new tab to avoid interrupting the current page
       const downloadUrl = `/api/documents/${documentId}/download?format=${format}`
       window.open(downloadUrl, '_blank')
     } catch (err) {
       console.error('Error downloading file:', err)
       alert(`Failed to download ${format.toUpperCase()} file. Please try again.`)
+    } finally {
+      // Add a small delay before removing loading state to ensure user sees the loading indicator
+      setTimeout(() => {
+        setLoadingOperations(prev => ({ ...prev, [`${documentId}-${format}`]: false }))
+      }, 1000)
     }
   }
 
@@ -413,9 +423,15 @@ export default function Dashboard() {
                           {document.translatedPdfUrl && (
                             <button 
                               onClick={() => downloadFile(document.id, 'pdf')}
-                              className="btn btn-secondary btn-sm"
+                              className="btn btn-secondary btn-sm relative"
                               title="Download PDF"
+                              disabled={loadingOperations[`${document.id}-pdf`]}
                             >
+                              {loadingOperations[`${document.id}-pdf`] ? (
+                                <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-75 rounded">
+                                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-amber-400"></div>
+                                </div>
+                              ) : null}
                               <Download className="h-4 w-4" />
                               PDF
                             </button>
@@ -423,9 +439,15 @@ export default function Dashboard() {
                           {document.translatedHtmlUrl && (
                             <button 
                               onClick={() => downloadFile(document.id, 'html')}
-                              className="btn btn-secondary btn-sm"
+                              className="btn btn-secondary btn-sm relative"
                               title="Download HTML"
+                              disabled={loadingOperations[`${document.id}-html`]}
                             >
+                              {loadingOperations[`${document.id}-html`] ? (
+                                <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-75 rounded">
+                                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-amber-400"></div>
+                                </div>
+                              ) : null}
                               <Download className="h-4 w-4" />
                               HTML
                             </button>
@@ -435,9 +457,15 @@ export default function Dashboard() {
                       
                       <button
                         onClick={() => deleteDocument(document.id)}
-                        className="text-gray-400 hover:text-red-600 transition-colors"
+                        className="text-gray-400 hover:text-red-600 transition-colors relative"
                         title="Delete document"
+                        disabled={loadingOperations[document.id]}
                       >
+                        {loadingOperations[document.id] ? (
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-red-400"></div>
+                          </div>
+                        ) : null}
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
