@@ -23,7 +23,7 @@ declare module 'pdfjs-dist/build/pdf.js' {
   }
 
   export interface GetDocumentParams {
-    data?: Buffer;
+    data?: Uint8Array | Buffer;
     isEvalSupported?: boolean;
     useSystemFonts?: boolean;
   }

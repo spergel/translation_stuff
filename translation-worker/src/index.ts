@@ -94,7 +94,8 @@ const languageMap: { [key: string]: string } = {
 // Helper: Render a PDF page to a PNG data URI using PDF.js
 async function renderPageToImage(pdfPath: string, pageNumber: number): Promise<string> {
   const dataBuffer = await fsp.readFile(pdfPath);
-  const pdfDoc = await getDocument({ data: dataBuffer }).promise;
+  const uint8Array = new Uint8Array(dataBuffer);
+  const pdfDoc = await getDocument({ data: uint8Array }).promise;
   const page = await pdfDoc.getPage(pageNumber);
   
   const viewport = page.getViewport({ scale: 1.5 });
@@ -119,7 +120,8 @@ async function renderPageToImage(pdfPath: string, pageNumber: number): Promise<s
 // Helper: Extract text from PDF using pdf.js
 async function extractTextFromPdf(pdfPath: string): Promise<string[]> {
   const dataBuffer = await fsp.readFile(pdfPath);
-  const pdfDoc = await getDocument({ data: dataBuffer }).promise;
+  const uint8Array = new Uint8Array(dataBuffer);
+  const pdfDoc = await getDocument({ data: uint8Array }).promise;
   const numPages = pdfDoc.numPages;
   const pageTexts: string[] = [];
 
