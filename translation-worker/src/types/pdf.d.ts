@@ -36,5 +36,5 @@ declare module 'pdfjs-dist/build/pdf.js' {
     promise: Promise<PDFDocumentProxy>;
   };
 
-  export const GlobalWorkerOptions: GlobalWorkerOptions;
+  export const GlobalWorkerOptions: { workerSrc: string; };
 } 
