@@ -6,9 +6,14 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { Readable } from 'stream';
 import { finished } from 'stream/promises';
-import pdf from 'pdf-parse';
+import * as pdfjsLib from 'pdfjs-dist';
 import { convert } from 'pdf-poppler';
 import sharp from 'sharp';
+
+// Initialize PDF.js worker
+const pdfjsWorker = await pdfjsLib.getDocument({
+  standardFontDataUrl: `node_modules/pdfjs-dist/standard_fonts/`
+}).promise;
 
 // Load environment variables
 dotenv.config();
@@ -103,24 +108,62 @@ async function renderPageToImage(pdfPath: string, pageNumber: number): Promise<s
   return base64Image;
 }
 
-// Helper: Extract text from PDF
+// Helper: Extract text from PDF using pdf.js
 async function extractTextFromPdf(pdfPath: string): Promise<string[]> {
   const dataBuffer = await fsp.readFile(pdfPath);
-  const data = await pdf(dataBuffer);
-  return [data.text];
+  const pdf = await pdfjsLib.getDocument({ data: dataBuffer }).promise;
+  const numPages = pdf.numPages;
+  const pageTexts: string[] = [];
+
+  for (let i = 1; i <= numPages; i++) {
+    const page = await pdf.getPage(i);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items
+      .map((item: any) => item.str)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    pageTexts.push(pageText);
+  }
+
+  return pageTexts;
 }
 
-// Helper: Call Gemini API with retry for long texts
-async function callGeminiAPI(prompt: string, geminiModel: string, geminiApiKey: string): Promise<string> {
+// Helper: Call Gemini API for text extraction
+async function extractTextFromImage(imageBase64: string, geminiModel: string, geminiApiKey: string): Promise<string> {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ 
+        parts: [
+          { inlineData: { mimeType: "image/png", data: imageBase64.split(',')[1] } },
+          { text: "Extract ALL text from this image. Be thorough and precise." }
+        ] 
+      }],
+      generationConfig: { temperature: 0.1 }
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Gemini API error: ${response.status}`);
+  }
+
+  const result = await response.json() as GeminiResponse;
+  return result.candidates?.[0]?.content?.parts?.[0]?.text || "[Text extraction failed]";
+}
+
+// Helper: Call Gemini API for translation with length handling
+async function translateText(text: string, targetLang: string, geminiModel: string, geminiApiKey: string): Promise<string> {
   const MAX_CHARS = 4000; // Approximate max chars for a single request
   
-  if (prompt.length <= MAX_CHARS) {
+  if (text.length <= MAX_CHARS) {
     // Single request for short text
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
+        contents: [{ parts: [{ text: `Translate the following text to ${targetLang}: ${text}` }] }],
         generationConfig: { temperature: 0.1 }
       })
     });
@@ -133,12 +176,12 @@ async function callGeminiAPI(prompt: string, geminiModel: string, geminiApiKey: 
     return result.candidates?.[0]?.content?.parts?.[0]?.text || "[Translation failed]";
   } else {
     // Split long text into two parts
-    const midPoint = Math.floor(prompt.length / 2);
+    const midPoint = Math.floor(text.length / 2);
     // Try to find a good breaking point (end of sentence or paragraph)
-    const breakPoint = prompt.lastIndexOf('.', midPoint) + 1 || prompt.lastIndexOf('\n', midPoint) + 1 || midPoint;
+    const breakPoint = text.lastIndexOf('.', midPoint) + 1 || text.lastIndexOf('\n', midPoint) + 1 || midPoint;
     
-    const firstHalf = prompt.substring(0, breakPoint);
-    const secondHalf = prompt.substring(breakPoint);
+    const firstHalf = text.substring(0, breakPoint);
+    const secondHalf = text.substring(breakPoint);
 
     // Make two separate API calls
     const [firstResponse, secondResponse] = await Promise.all([
@@ -146,7 +189,7 @@ async function callGeminiAPI(prompt: string, geminiModel: string, geminiApiKey: 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: firstHalf }] }],
+          contents: [{ parts: [{ text: `Translate the following text to ${targetLang}: ${firstHalf}` }] }],
           generationConfig: { temperature: 0.1 }
         })
       }),
@@ -154,7 +197,7 @@ async function callGeminiAPI(prompt: string, geminiModel: string, geminiApiKey: 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: secondHalf }] }],
+          contents: [{ parts: [{ text: `Translate the following text to ${targetLang}: ${secondHalf}` }] }],
           generationConfig: { temperature: 0.1 }
         })
       })
@@ -212,7 +255,7 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
 
       // Process PDF
       const allPageTexts = await extractTextFromPdf(workerTempFilePath);
-      const totalPages = 1; // For now, treat as single page
+      const totalPages = allPageTexts.length;
       const allPageResults: TranslationResult[] = [];
 
       for (let i = 1; i <= totalPages; i++) {
@@ -221,7 +264,7 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
         
         console.log(`📄 Processing page ${currentPageNumber}/${totalPages}`);
         
-        const originalPageText = allPageTexts[0] || '';
+        const originalPageText = allPageTexts[i - 1] || '';
         const pageImageBase64 = await renderPageToImage(workerTempFilePath, currentPageNumber);
         const imageOnly = originalPageText.trim().length < 20;
         pageNotes += ` Mode: ${imageOnly ? 'Image-Only' : 'Text+Image'}.`;
@@ -237,16 +280,38 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
         }
 
         try {
-          const prompt = imageOnly
-            ? `Extract ALL text from this image and translate it to ${targetLangName}. Be thorough.`
-            : `Translate the following text to ${targetLangName}: ${originalPageText}`;
+          // Step 1: Extract text if needed
+          if (imageOnly) {
+            try {
+              finalExtractedText = await extractTextFromImage(pageImageBase64, geminiModel, geminiApiKey);
+              pageNotes += ` Text extraction successful.`;
+            } catch (extractError: any) {
+              console.error(`Text extraction error for page ${currentPageNumber}:`, extractError);
+              pageNotes += ` Text extraction failed: ${extractError.message || 'Unknown error'}.`;
+              finalExtractedText = "[Text extraction failed]";
+            }
+          }
 
-          finalTranslatedText = await callGeminiAPI(prompt, geminiModel, geminiApiKey);
-          pageNotes += ` Translation successful.`;
+          // Step 2: Translate the text (either original or extracted)
+          if (finalExtractedText !== "[Text extraction failed]") {
+            try {
+              finalTranslatedText = await translateText(finalExtractedText, targetLangName, geminiModel, geminiApiKey);
+              pageNotes += ` Translation successful.`;
+            } catch (translateError: any) {
+              console.error(`Translation error for page ${currentPageNumber}:`, translateError);
+              pageNotes += ` Translation failed: ${translateError.message || 'Unknown error'}.`;
+              finalTranslatedText = "[Translation failed]";
+            }
+          } else {
+            finalTranslatedText = "[Translation skipped due to extraction failure]";
+            pageNotes += ` Translation skipped.`;
+          }
         } catch (error: any) {
-          console.error(`Translation error for page ${currentPageNumber}:`, error);
-          pageNotes += ` Translation failed: ${error.message || 'Unknown error'}.`;
-          finalTranslatedText = "[Translation failed]";
+          console.error(`Overall processing error for page ${currentPageNumber}:`, error);
+          pageNotes += ` Processing failed: ${error.message || 'Unknown error'}.`;
+          if (finalTranslatedText === "[Translation pending]") {
+            finalTranslatedText = "[Processing failed]";
+          }
         }
 
         const pageResult: TranslationResult = {
