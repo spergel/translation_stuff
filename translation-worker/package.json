@@ -8,7 +8,7 @@
     "build": "tsc && npm run copy-pdfjs",
     "start": "node dist/index.js",
     "dev": "ts-node --esm src/index.ts",
-    "copy-pdfjs": "mkdir -p dist && cp node_modules/pdfjs-dist/legacy/build/pdf.worker.js dist/ && cp -r node_modules/pdfjs-dist/legacy/build/standard_fonts dist/"
+    "copy-pdfjs": "mkdir -p dist && cp node_modules/pdfjs-dist/build/pdf.worker.js dist/ && cp -r node_modules/pdfjs-dist/standard_fonts dist/"
   },
   "dependencies": {
     "bullmq": "^5.1.1",
@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "@types/pdfjs-dist": "^2.16.105",
     "typescript": "^5.4.2",
     "ts-node": "^10.9.2"
   },
