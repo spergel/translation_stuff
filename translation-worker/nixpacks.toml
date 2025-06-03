@@ -44,4 +44,4 @@ cmds = [
 cmds = ["npm run build"] # Assumes tsc compilation via `npm run build`
 
 [start]
-cmd = "npm run start" # Assumes `node dist/index.js` via `npm run start` 
+cmd = "node dist/index.js" 
