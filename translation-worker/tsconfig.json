@@ -15,7 +15,7 @@
     "checkJs": false,
     "isolatedModules": true,
     "noEmit": false,
-    "lib": ["ES2020", "DOM"],
+    "lib": ["ES2020"],
     "types": ["node"]
   },
   "include": ["src/**/*"],
