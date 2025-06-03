@@ -12,13 +12,11 @@ import sharp from 'sharp';
 
 // Configure PDF.js for Node.js environment
 const pdfjsWorkerSrc = path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.js');
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc;
-
-// Initialize PDF.js worker
-const pdfjsWorker = await pdfjsLib.getDocument({
-  isEvalSupported: false,
-  useSystemFonts: true
-}).promise;
+await import(pdfjsWorkerSrc);
+Object.defineProperty(pdfjsLib, 'GlobalWorkerOptions', {
+  value: { workerSrc: pdfjsWorkerSrc },
+  writable: true
+});
 
 // Load environment variables
 dotenv.config();
@@ -233,7 +231,7 @@ async function translateText(text: string, targetLang: string, geminiModel: stri
 // Create worker
 const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
   QUEUE_NAME,
-  async (job: Job<PdfTranslationJobData, TranslationResult[]>) => {
+  async (job: Job<PdfTranslationJobData, TranslationResult[]>): Promise<TranslationResult[]> => {
     const { file, blobUrl, targetLanguage, userId, userTier } = job.data;
     const { name: originalFilename } = file;
 
@@ -263,7 +261,7 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
       await finished(Readable.fromWeb(response.body as import('stream/web').ReadableStream).pipe(fileStream));
       downloadSuccess = true;
       console.log(`✅ Downloaded to ${workerTempFilePath}`);
-
+      
       // Process PDF
       const allPageTexts = await extractTextFromPdf(workerTempFilePath);
       const totalPages = allPageTexts.length;
@@ -317,6 +315,17 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
             finalTranslatedText = "[Translation skipped due to extraction failure]";
             pageNotes += ` Translation skipped.`;
           }
+
+          const pageResult: TranslationResult = {
+            page_number: currentPageNumber,
+            original_text: finalExtractedText,
+            translated_text: finalTranslatedText,
+            page_image: pageImageBase64,
+            notes: pageNotes.trim()
+          };
+          allPageResults.push(pageResult);
+
+          await job.updateProgress(Math.round((currentPageNumber / totalPages) * 100));
         } catch (error: any) {
           console.error(`Overall processing error for page ${currentPageNumber}:`, error);
           pageNotes += ` Processing failed: ${error.message || 'Unknown error'}.`;
@@ -324,17 +333,6 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
             finalTranslatedText = "[Processing failed]";
           }
         }
-
-        const pageResult: TranslationResult = {
-          page_number: currentPageNumber,
-          original_text: finalExtractedText,
-          translated_text: finalTranslatedText,
-          page_image: pageImageBase64,
-          notes: pageNotes.trim()
-        };
-        allPageResults.push(pageResult);
-
-        await job.updateProgress(Math.round((currentPageNumber / totalPages) * 100));
       }
 
       // Clean up
@@ -359,25 +357,3 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
     limiter: { max: 100, duration: 1000 }
   }
 );
-
-worker.on('completed', (job, result) => {
-  console.log(`🎉 Job ${job.id} completed with ${result.length} page results`);
-});
-
-worker.on('failed', (job, err) => {
-  console.error(`🔥 Job ${job?.id} failed:`, err.message);
-});
-
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received. Closing worker...');
-  await worker.close();
-  process.exit(0);
-});
-
-process.on('SIGINT', async () => {
-  console.log('SIGINT received. Closing worker...');
-  await worker.close();
-  process.exit(0);
-});
-
-console.log('✨ PDF Translation Worker started successfully ✨'); 
