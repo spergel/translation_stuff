@@ -7,7 +7,7 @@ import path from 'path';
 import { Readable } from 'stream';
 import { finished } from 'stream/promises';
 import * as pdfjsLib from 'pdfjs-dist/build/pdf.js';
-import { convert } from 'pdf-poppler';
+import { createCanvas } from 'canvas';
 import sharp from 'sharp';
 
 // Configure PDF.js for Node.js environment
@@ -89,28 +89,34 @@ const languageMap: { [key: string]: string } = {
   'arabic': 'Arabic'
 };
 
-// Helper: Render a PDF page to a PNG data URI
+// Helper: Render a PDF page to a PNG data URI using PDF.js
 async function renderPageToImage(pdfPath: string, pageNumber: number): Promise<string> {
-  const outputDir = path.dirname(pdfPath);
-  const outputPrefix = path.join(outputDir, `page-${pageNumber}`);
+  const dataBuffer = await fsp.readFile(pdfPath);
+  const pdf = await pdfjsLib.getDocument({ data: dataBuffer }).promise;
+  const page = await pdf.getPage(pageNumber);
   
-  await convert(pdfPath, {
-    out_dir: outputDir,
-    out_prefix: `page-${pageNumber}`,
-    page: pageNumber,
-    format: 'png',
-    scale: 1.5
-  });
-
-  const pngPath = `${outputPrefix}-1.png`;
-  const imageBuffer = await fsp.readFile(pngPath);
-  const base64Image = await sharp(imageBuffer)
+  // Get page dimensions
+  const viewport = page.getViewport({ scale: 1.5 });
+  
+  // Create canvas
+  const canvas = createCanvas(viewport.width, viewport.height);
+  const context = canvas.getContext('2d');
+  
+  // Render PDF page to canvas
+  await page.render({
+    canvasContext: context,
+    viewport: viewport
+  }).promise;
+  
+  // Convert canvas to buffer
+  const buffer = canvas.toBuffer('image/png');
+  
+  // Process with sharp for optimization
+  const optimizedBuffer = await sharp(buffer)
     .resize(1500, null, { withoutEnlargement: true })
-    .toBuffer()
-    .then(buffer => `data:image/png;base64,${buffer.toString('base64')}`);
-
-  await fsp.unlink(pngPath);
-  return base64Image;
+    .toBuffer();
+    
+  return `data:image/png;base64,${optimizedBuffer.toString('base64')}`;
 }
 
 // Helper: Extract text from PDF using pdf.js
