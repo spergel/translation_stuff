@@ -14,6 +14,9 @@ RUN apt-get update && \
 # Copy requirements file
 COPY requirements.txt .
 
+# Debug: List files in build context and check for src directory
+RUN echo "==== Build context files ====" && ls -al && echo "==== /build/src directory ====" && ls -al src || echo "src directory not found"
+
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
