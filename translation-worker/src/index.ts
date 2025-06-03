@@ -6,13 +6,16 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { Readable } from 'stream';
 import { finished } from 'stream/promises';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
+import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist/build/pdf.js';
 import { createCanvas } from 'canvas';
 import sharp from 'sharp';
+import { fileURLToPath } from 'url';
 
 // Configure PDF.js for Node.js environment
-const pdfjsWorkerSrc = path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.js');
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const pdfjsWorkerSrc = path.join(__dirname, 'pdf.worker.js'); // Assumes pdf.worker.js is copied to dist
+GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc;
 
 // Load environment variables
 dotenv.config();
@@ -59,13 +62,13 @@ interface TranslationResult {
 interface PdfTranslationJobData {
   file: {
     name: string;
-    type: string;
+    type: string; 
     size: number;
   };
   blobUrl: string;
   targetLanguage: string;
   userId?: string;
-  userTier?: string;
+  userTier?: string; 
 }
 
 // Language mapping
@@ -86,42 +89,37 @@ const languageMap: { [key: string]: string } = {
 // Helper: Render a PDF page to a PNG data URI using PDF.js
 async function renderPageToImage(pdfPath: string, pageNumber: number): Promise<string> {
   const dataBuffer = await fsp.readFile(pdfPath);
-  const pdf = await pdfjsLib.getDocument({ data: dataBuffer }).promise;
-  const page = await pdf.getPage(pageNumber);
+  const pdfDoc = await getDocument({ data: dataBuffer }).promise;
+  const page = await pdfDoc.getPage(pageNumber);
   
-  // Get page dimensions
   const viewport = page.getViewport({ scale: 1.5 });
   
-  // Create canvas
   const canvas = createCanvas(viewport.width, viewport.height);
   const context = canvas.getContext('2d');
   
-  // Render PDF page to canvas
   await page.render({
     canvasContext: context,
     viewport: viewport
   }).promise;
   
-  // Convert canvas to buffer
   const buffer = canvas.toBuffer('image/png');
   
-  // Process with sharp for optimization
   const optimizedBuffer = await sharp(buffer)
     .resize(1500, null, { withoutEnlargement: true })
     .toBuffer();
-    
+
   return `data:image/png;base64,${optimizedBuffer.toString('base64')}`;
 }
 
 // Helper: Extract text from PDF using pdf.js
 async function extractTextFromPdf(pdfPath: string): Promise<string[]> {
   const dataBuffer = await fsp.readFile(pdfPath);
-  const pdf = await pdfjsLib.getDocument({ data: dataBuffer }).promise;
-  const numPages = pdf.numPages;
+  const pdfDoc = await getDocument({ data: dataBuffer }).promise;
+  const numPages = pdfDoc.numPages;
   const pageTexts: string[] = [];
 
   for (let i = 1; i <= numPages; i++) {
-    const page = await pdf.getPage(i);
+    const page = await pdfDoc.getPage(i);
     const textContent = await page.getTextContent();
     const pageText = textContent.items
       .map((item: any) => item.str)
@@ -160,10 +158,9 @@ async function extractTextFromImage(imageBase64: string, geminiModel: string, ge
 
 // Helper: Call Gemini API for translation with length handling
 async function translateText(text: string, targetLang: string, geminiModel: string, geminiApiKey: string): Promise<string> {
-  const MAX_CHARS = 4000; // Approximate max chars for a single request
+  const MAX_CHARS = 4000; 
   
   if (text.length <= MAX_CHARS) {
-    // Single request for short text
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -180,15 +177,12 @@ async function translateText(text: string, targetLang: string, geminiModel: stri
     const result = await response.json() as GeminiResponse;
     return result.candidates?.[0]?.content?.parts?.[0]?.text || "[Translation failed]";
   } else {
-    // Split long text into two parts
     const midPoint = Math.floor(text.length / 2);
-    // Try to find a good breaking point (end of sentence or paragraph)
     const breakPoint = text.lastIndexOf('.', midPoint) + 1 || text.lastIndexOf('\n', midPoint) + 1 || midPoint;
     
     const firstHalf = text.substring(0, breakPoint);
     const secondHalf = text.substring(breakPoint);
 
-    // Make two separate API calls
     const [firstResponse, secondResponse] = await Promise.all([
       fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`, {
         method: 'POST',
@@ -231,10 +225,8 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
     const { file, blobUrl, targetLanguage, userId, userTier } = job.data;
     const { name: originalFilename } = file;
 
-    // Determine Gemini Model based on User Tier
     const geminiModel = userTier === 'pro' ? 'gemini-2.0-flash' : 'gemini-1.5-flash-8b';
     
-    // Create temp directory and file path
     const workerTempDir = '/tmp/worker-pdfs';
     await fsp.mkdir(workerTempDir, { recursive: true });
     const workerTempFilePath = path.join(workerTempDir, `${job.id}-${path.basename(originalFilename)}`);
@@ -243,7 +235,6 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
     console.log(`🚀 Processing PDF translation job ${job.id}: "${originalFilename}"`);
     
     try {
-      // Download file from Vercel Blob
       console.log(`⬇️ Downloading from ${blobUrl} to ${workerTempFilePath}...`);
       const response = await fetch(blobUrl);
       if (!response.ok) {
@@ -258,7 +249,6 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
       downloadSuccess = true;
       console.log(`✅ Downloaded to ${workerTempFilePath}`);
       
-      // Process PDF
       const allPageTexts = await extractTextFromPdf(workerTempFilePath);
       const totalPages = allPageTexts.length;
       const allPageResults: TranslationResult[] = [];
@@ -278,14 +268,12 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
         let finalExtractedText = imageOnly ? "[Image text to be extracted]" : originalPageText;
         let finalTranslatedText = "[Translation pending]";
 
-        // Call Gemini API for translation
         const geminiApiKey = process.env.GOOGLE_API_KEY;
         if (!geminiApiKey) {
           throw new Error("GOOGLE_API_KEY environment variable is not set");
         }
 
         try {
-          // Step 1: Extract text if needed
           if (imageOnly) {
             try {
               finalExtractedText = await extractTextFromImage(pageImageBase64, geminiModel, geminiApiKey);
@@ -297,7 +285,6 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
             }
           }
 
-          // Step 2: Translate the text (either original or extracted)
           if (finalExtractedText !== "[Text extraction failed]") {
             try {
               finalTranslatedText = await translateText(finalExtractedText, targetLangName, geminiModel, geminiApiKey);
@@ -331,7 +318,6 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
         }
       }
 
-      // Clean up
       if (downloadSuccess) {
         await fsp.unlink(workerTempFilePath);
         console.log(`🗑️ Deleted temporary file ${workerTempFilePath}`);
@@ -349,7 +335,29 @@ const worker = new Worker<PdfTranslationJobData, TranslationResult[]>(
   },
   {
     connection,
-    concurrency: 1,
-    limiter: { max: 100, duration: 1000 }
+    concurrency: 1, // Process one job at a time
+    limiter: { max: 100, duration: 1000 } // Allow 100 jobs per second (example)
   }
 );
+
+worker.on('completed', (job, result) => {
+  console.log(`🎉 Job ${job.id} completed with ${result.length} page results`);
+});
+
+worker.on('failed', (job, err) => {
+  console.error(`🔥 Job ${job?.id} failed:`, err.message);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received. Closing worker...');
+  await worker.close();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('SIGINT received. Closing worker...');
+  await worker.close();
+  process.exit(0);
+});
+
+console.log('✨ PDF Translation Worker started successfully ✨');
