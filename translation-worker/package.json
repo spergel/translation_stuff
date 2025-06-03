@@ -14,7 +14,7 @@
     "dotenv": "^16.4.5",
     "ioredis": "^5.3.2",
     "pdf-poppler": "^0.2.1",
-    "pdfjs-dist": "^4.0.379",
+    "pdfjs-dist": "2.16.105",
     "sharp": "^0.33.2"
   },
   "devDependencies": {

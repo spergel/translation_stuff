@@ -6,13 +6,13 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { Readable } from 'stream';
 import { finished } from 'stream/promises';
-import * as pdfjsLib from 'pdfjs-dist';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
 import { convert } from 'pdf-poppler';
 import sharp from 'sharp';
 
 // Initialize PDF.js worker
 const pdfjsWorker = await pdfjsLib.getDocument({
-  standardFontDataUrl: `node_modules/pdfjs-dist/standard_fonts/`
+  standardFontDataUrl: `node_modules/pdfjs-dist/legacy/build/standard_fonts/`
 }).promise;
 
 // Load environment variables
