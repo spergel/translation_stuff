@@ -228,6 +228,13 @@ export default function JobItem({ job, onDelete, getAllJobs, downloadFormat }: J
           </p>
         </div>
       )}
+
+      {job.syncing && (
+        <div className="flex items-center text-amber-500 mt-2">
+          <span className="animate-spin mr-2">⏳</span>
+          Syncing with server...
+        </div>
+      )}
     </div>
   )
 } 

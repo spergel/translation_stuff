@@ -27,8 +27,7 @@ load_dotenv()
 # Configure Redis connection
 redis_conn = redis.Redis.from_url(
     os.getenv('REDIS_CONNECTION_STRING', ''),
-    ssl_cert_reqs=None,
-    decode_responses=True
+    ssl=True
 )
 
 # Configure Gemini API

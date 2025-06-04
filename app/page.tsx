@@ -205,7 +205,8 @@ export default function Home() {
     originalFilename: string,
     targetLanguage: TargetLanguage,
     userId: string,
-    processingTimeMs?: number
+    processingTimeMs?: number,
+    localJobId?: string
   ) => {
     if (!session?.user?.id || !documentId) {
       console.error("User ID or Document ID is missing, cannot update document in DB.");
@@ -282,7 +283,6 @@ export default function Home() {
       updateError = error instanceof Error ? error.message : 'Unknown DB update/upload error';
     } finally {
       // Update job status in UI regardless of success or failure of DB update
-      // This ensures the job itself is marked as 'completed' or 'error' based on the outcome
       setJobs(prevJobs => prevJobs.map(j => {
         if (j.documentId === documentId) {
           if (updateError) {
@@ -294,6 +294,7 @@ export default function Home() {
               results, 
               translatedPdfUrl: translatedPdfUrl || j.translatedPdfUrl,
               translatedHtmlUrl: translatedHtmlUrl || j.translatedHtmlUrl,
+              syncing: false
             };
           } else {
             // Successful update
@@ -305,6 +306,7 @@ export default function Home() {
               statusMessage: 'Translation complete & saved!',
               translatedPdfUrl,
               translatedHtmlUrl,
+              syncing: false
             };
           }
         }
@@ -322,65 +324,52 @@ export default function Home() {
           const errorText = await response.text(); 
           throw new Error(`Failed to get job status: ${response.status} ${errorText}`);
         }
-
-        // Ensure result is properly typed if it comes from an API
         const jobStatusData = await response.json() as { 
           state: 'completed' | 'failed' | 'active' | 'waiting' | 'delayed' | 'paused'; 
           progress: number; 
-          result?: TranslationResult[]; // Corrected: result is the array directly, or undefined
+          result?: TranslationResult[];
           failedReason?: string;
-          processedOn?: string; // BullMQ job property
-          finishedOn?: string;  // BullMQ job property
+          processedOn?: string;
+          finishedOn?: string;
         };
 
         setJobs(prevJobs => prevJobs.map(job => {
           if (job.id === localJobId) {
             const updatedJob = { ...job };
-
             switch (jobStatusData.state) {
               case 'completed':
                 updatedJob.status = 'completed';
                 updatedJob.progress = 100;
-                updatedJob.results = jobStatusData.result; // Corrected assignment
-                updatedJob.statusMessage = 'Translation complete!';
+                updatedJob.results = jobStatusData.result;
+                updatedJob.statusMessage = 'Syncing with server...';
+                updatedJob.syncing = true;
                 clearInterval(pollInterval);
-
                 if (updatedJob.documentId && session?.user?.id && updatedJob.results && updatedJob.results.length > 0) {
                   let jobProcessingTimeMs: number | undefined = undefined;
-                  // Use finishedOn and processedOn from the top-level jobStatusData (more reliable from BullMQ)
                   if (jobStatusData.finishedOn && jobStatusData.processedOn) {
                     jobProcessingTimeMs = new Date(jobStatusData.finishedOn).getTime() - new Date(jobStatusData.processedOn).getTime();
                   }
-                  
                   updateCompletedDocumentInDB(
                     updatedJob.documentId,
-                    updatedJob.results, // This should now be correctly populated
+                    updatedJob.results,
                     updatedJob.filename,
                     selectedLanguage,
                     session.user.id,
-                    jobProcessingTimeMs
+                    jobProcessingTimeMs,
+                    localJobId
                   ).catch(error => {
-                    // This catch is for unexpected errors from updateCompletedDocumentInDB itself,
-                    // though it's designed to handle its own UI updates.
-                    console.error("Error during updateCompletedDocumentInDB:", error);
-                    // Minimal update here as updateCompletedDocumentInDB should handle detailed UI.
-                     setJobs(prev => prev.map(job => job.id === localJobId ? {
-                       ...job, status: 'error', error: 'Failed to finalize completion.', statusMessage: 'Error saving results.'
-                     } : job));
+                    setJobs(prev => prev.map(job => job.id === localJobId ? {
+                      ...job, status: 'error', error: 'Failed to finalize completion.', statusMessage: 'Error saving results.', syncing: false
+                    } : job));
                   });
-                  // Note: We are not returning updatedJob directly here because updateCompletedDocumentInDB
-                  // will set the job's state asynchronously. The current switch case's job update
-                  // should primarily reflect the worker's direct status ('completed' from worker).
-                  // The final state (saved, or error saving) will be set by updateCompletedDocumentInDB.
                 } else if (!updatedJob.results || updatedJob.results.length === 0) {
-                  console.warn(`Job ${localJobId} for document ${updatedJob.documentId} completed but has no results. Marking as error.`);
                   updatedJob.status = 'error';
                   updatedJob.error = 'Completed with no translation data.';
                   updatedJob.statusMessage = 'Error: No translation data received.';
+                  updatedJob.syncing = false;
                 } else if (!updatedJob.documentId || !session?.user?.id) {
-                  console.warn(`Job ${localJobId} completed but cannot be saved (no documentId or user session). Status remains completed locally.`);
-                  // UI will show completed, but it won't be persisted if there's no documentId/user
                   updatedJob.statusMessage = 'Completed (not saved to account).';
+                  updatedJob.syncing = false;
                 }
                 break;
               case 'failed':

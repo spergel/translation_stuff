@@ -41,6 +41,7 @@ export interface TranslationJob {
   queueJobId?: string
   translatedPdfUrl?: string
   translatedHtmlUrl?: string
+  syncing?: boolean
 }
 
 export type UserTier = 'free' | 'basic' | 'pro' | 'enterprise'
