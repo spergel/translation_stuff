@@ -25,9 +25,12 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Configure Redis connection
+redis_url = os.getenv('REDIS_CONNECTION_STRING', '')
+if not redis_url.startswith('rediss://'):
+    redis_url = redis_url.replace('redis://', 'rediss://')
+
 redis_conn = redis.Redis.from_url(
-    os.getenv('REDIS_CONNECTION_STRING', ''),
-    ssl=True,
+    redis_url,
     decode_responses=True
 )
 
