@@ -9,7 +9,8 @@ import requests
 from PIL import Image
 import PyPDF2
 import redis
-from rq import Worker, Queue, Connection
+from rq import Worker, Queue
+from rq.connection import get_current_connection
 from dotenv import load_dotenv
 import google.generativeai as genai
 from pdf2image import convert_from_path
@@ -194,9 +195,8 @@ if __name__ == '__main__':
     logger.info("✨ PDF Translation Worker started successfully ✨")
     
     try:
-        with Connection(redis_conn):
-            worker = Worker(['translation-jobs'])
-            worker.work()
+        worker = Worker(['translation-jobs'], connection=redis_conn)
+        worker.work()
     except Exception as e:
         logger.error(f"Worker failed: {str(e)}")
         raise 
