@@ -47,11 +47,8 @@ export default function Home() {
     }
 
     const newJobs: TranslationJob[] = [];
-    const filesToProcess: { originalFile: File, tempUploadData?: any }[] = acceptedFiles.map(f => ({ originalFile: f }));
 
-    // Step 1: Upload all files to temporary storage first
-    for (const fileWrapper of filesToProcess) {
-      const file = fileWrapper.originalFile;
+    for (const file of acceptedFiles) {
       const sizeMB = file.size / (1024 * 1024);
       if (sizeMB > limits.maxSizeMB) {
         if (!session?.user) {
@@ -59,144 +56,120 @@ export default function Home() {
         } else {
           alert(`File "${file.name}" (${Math.round(sizeMB)}MB) exceeds ${userTier} tier limit of ${limits.maxSizeMB}MB`);
         }
-        continue; // Skip this file
-      }
-
-      try {
-        const tempForm = new FormData();
-        tempForm.append('file', file);
-        const tempUploadResponse = await fetch('/api/upload-temp-file', {
-          method: 'POST',
-          body: tempForm,
-        });
-
-        if (!tempUploadResponse.ok) {
-          const errorData = await tempUploadResponse.json();
-          throw new Error(errorData.error || 'Failed to upload file for temporary storage');
-        }
-        fileWrapper.tempUploadData = await tempUploadResponse.json();
-      } catch (error) {
-        console.error(`Failed to temporarily upload ${file.name}:`, error);
-        alert(`Could not prepare ${file.name} for translation: ${error instanceof Error ? error.message : 'Upload error'}. Please try again.`);
-        // Mark this file as failed to prevent further processing
-        fileWrapper.tempUploadData = null; 
-      }
-    }
-
-    const validFilesToProcess = filesToProcess.filter(f => f.tempUploadData);
-
-    if (validFilesToProcess.length === 0) {
-      if (acceptedFiles.length > 0) alert('No files were successfully prepared for translation.');
-      return;
-    }
-    
-    const totalSizeMB = validFilesToProcess.reduce((sum, f) => sum + f.originalFile.size / (1024 * 1024), 0);
-    if (validFilesToProcess.length > 1) {
-      const confirmed = confirm(
-        `You are about to process ${validFilesToProcess.length} PDF files (${Math.round(totalSizeMB)}MB total). ` +
-        `This will use significant computational resources. Continue?`
-      )
-      if (!confirmed) return
-    }
-
-    console.log(`📁 Preparing ${validFilesToProcess.length} files for ${session?.user ? userTier : 'anonymous'} user`);
-
-    for (const { originalFile, tempUploadData } of validFilesToProcess) {
-      if (!tempUploadData) continue; // Should have been filtered, but as a safeguard
-
-      const jobId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
-      const abortController = new AbortController();
-      let documentId: string | undefined = undefined;
-
-      const { tempFilePath, originalFilename, fileType, fileSize } = tempUploadData;
-
-      if (session?.user) {
-        try {
-          const documentResponse = await fetch('/api/documents', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              originalFilename: originalFilename, // Use filename from temp upload
-              title: originalFilename.replace(/\.pdf$/i, ''),
-              targetLanguage: selectedLanguage,
-              originalFileSize: fileSize, // Use fileSize from temp upload
-              translationSettings: { extractImages: true, userTier }
-            })
-          });
-
-          if (!documentResponse.ok) {
-            const error = await documentResponse.json();
-            if (error.code === 'DOCUMENT_LIMIT_EXCEEDED' || error.code === 'STORAGE_LIMIT_EXCEEDED') {
-              alert(error.error);
-              continue; 
-            }
-            throw new Error(error.error || 'Failed to create document');
-          }
-          const { document } = await documentResponse.json();
-          documentId = document.id;
-        } catch (error) {
-          console.error(`Failed to create document for ${originalFilename}:`, error);
-          alert(`Failed to start processing for ${originalFilename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
-          continue;
-        }
-      }
-        
-      // Queue the translation job using tempFilePath
-      try {
-        const payloadToQueue = {
-          tempFilePath,
-          originalFilename,
-          fileType,
-          fileSize,
-          targetLanguage: selectedLanguage,
-          // userId and userTier are implicitly handled by the /api/translate if needed via session
-        };
-        console.log("[DEBUG] Queueing translation with data:", payloadToQueue); // Added for debugging
-
-        const queueResponse = await fetch('/api/translate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payloadToQueue)
-        });
-
-        if (!queueResponse.ok) {
-          const errorData = await queueResponse.json();
-          throw new Error(errorData.error || 'Failed to queue translation job');
-        }
-
-        const { jobId: queueJobId } = await queueResponse.json();
-        
-        const job: TranslationJob = {
-          id: jobId,
-          filename: originalFilename, // Use filename from temp upload
-          status: 'queued',
-          progress: 0,
-          originalFile: originalFile, // Keep original File object for UI/display if needed
-          abortController,
-          statusMessage: 'Queued for translation...',
-          documentId,
-          queueJobId 
-        };
-        newJobs.push(job);
-      } catch (error) {
-        console.error(`Failed to queue translation for ${originalFilename}:`, error);
-        alert(`Failed to queue translation for ${originalFilename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         continue;
       }
-    }
 
-    setJobs(prev => [...prev, ...newJobs]);
+      try {
+        // Upload directly to Vercel Blob
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const uploadResponse = await fetch('/api/upload-temp-file', {
+          method: 'POST',
+          body: formData,
+        });
 
-    if (!session?.user && newJobs.length > 0) {
-      setShowSavePrompt(true);
-    }
+        if (!uploadResponse.ok) {
+          const errorData = await uploadResponse.json();
+          throw new Error(errorData.error || 'Failed to upload file');
+        }
 
-    for (const job of newJobs) {
-      if (job.queueJobId) {
-        pollJobStatus(job.queueJobId, job.id);
+        const uploadData = await uploadResponse.json();
+        const { blobUrl, originalFilename, fileType, fileSize } = uploadData;
+
+        const jobId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
+        const abortController = new AbortController();
+        let documentId: string | undefined = undefined;
+
+        if (session?.user) {
+          try {
+            const documentResponse = await fetch('/api/documents', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                originalFilename,
+                title: originalFilename.replace(/\.pdf$/i, ''),
+                targetLanguage: selectedLanguage,
+                originalFileSize: fileSize,
+                translationSettings: { extractImages: true, userTier }
+              })
+            });
+
+            if (!documentResponse.ok) {
+              const error = await documentResponse.json();
+              if (error.code === 'DOCUMENT_LIMIT_EXCEEDED' || error.code === 'STORAGE_LIMIT_EXCEEDED') {
+                alert(error.error);
+                continue;
+              }
+              throw new Error(error.error || 'Failed to create document');
+            }
+            const { document } = await documentResponse.json();
+            documentId = document.id;
+          } catch (error) {
+            console.error(`Failed to create document for ${originalFilename}:`, error);
+            alert(`Failed to start processing for ${originalFilename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            continue;
+          }
+        }
+
+        // Create new job
+        const newJob: TranslationJob = {
+          id: jobId,
+          file: {
+            name: originalFilename,
+            type: fileType,
+            size: fileSize,
+            blobUrl: blobUrl
+          },
+          status: 'processing',
+          progress: 0,
+          targetLanguage: selectedLanguage,
+          documentId,
+          abortController,
+          createdAt: new Date().toISOString()
+        };
+
+        newJobs.push(newJob);
+
+        // Start translation process
+        processDocumentChunked({
+          file,
+          targetLanguage: selectedLanguage,
+          userTier,
+          onProgress: (progress, message) => {
+            setJobs(prevJobs => prevJobs.map(job => 
+              job.id === jobId 
+                ? { ...job, progress, status: message as any }
+                : job
+            ));
+          },
+          onPageComplete: (result) => {
+            setJobs(prevJobs => prevJobs.map(job => 
+              job.id === jobId 
+                ? { ...job, results: [...(job.results || []), result] }
+                : job
+            ));
+          },
+          signal: abortController.signal
+        }).catch(error => {
+          console.error(`Translation failed for ${originalFilename}:`, error);
+          setJobs(prevJobs => prevJobs.map(job => 
+            job.id === jobId 
+              ? { ...job, status: 'error', error: error.message }
+              : job
+          ));
+        });
+
+      } catch (error) {
+        console.error(`Failed to process ${file.name}:`, error);
+        alert(`Could not process ${file.name}: ${error instanceof Error ? error.message : 'Upload error'}. Please try again.`);
       }
     }
-  }, [selectedLanguage, userTier, session])
+
+    if (newJobs.length > 0) {
+      setJobs(prevJobs => [...prevJobs, ...newJobs]);
+    }
+  }, [session?.user, userTier, selectedLanguage]);
 
   // Function to update document in DB after completion and file uploads
   const updateCompletedDocumentInDB = async (
@@ -352,7 +325,7 @@ export default function Home() {
                   updateCompletedDocumentInDB(
                     updatedJob.documentId,
                     updatedJob.results,
-                    updatedJob.filename,
+                    updatedJob.file.name,
                     selectedLanguage,
                     session.user.id,
                     jobProcessingTimeMs,

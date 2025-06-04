@@ -6,7 +6,7 @@ import { TranslationResult } from '@/app/types/translation';
 console.log('Redis Connection String:', process.env.REDIS_CONNECTION_STRING);
 
 // Redis connection configuration
-const connection = new IORedis(process.env.REDIS_CONNECTION_STRING!, {
+export const connection = new IORedis(process.env.REDIS_CONNECTION_STRING!, {
   tls: {
     rejectUnauthorized: false
   },

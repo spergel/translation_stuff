@@ -59,14 +59,13 @@ export default function JobItem({ job, onDelete, getAllJobs, downloadFormat }: J
   }
 
   const openTranslationOnly = () => {
-    if (!job.results) {
-      alert('No translation results available')
+    if (!job.results || job.results.length === 0) {
       return
     }
-    console.log('Opening translation-only view for:', job.filename, 'with', job.results.length, 'pages')
+    console.log('Opening translation-only view for:', job.file.name, 'with', job.results.length, 'pages')
     try {
       // Generate translation-only HTML and open in new window
-      const html = generateTranslationOnlyHTML(job.results, job.filename)
+      const html = generateTranslationOnlyHTML(job.results, job.file.name)
       const newWindow = window.open('', '_blank')
       if (newWindow) {
         newWindow.document.write(html)
@@ -94,7 +93,11 @@ export default function JobItem({ job, onDelete, getAllJobs, downloadFormat }: J
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-3">
           <FileText className="h-6 w-6 text-primary-300" />
-          <span className="font-medium text-gray-900">{job.filename}</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-gray-900 truncate">
+              <span className="font-medium text-gray-900">{job.file.name}</span>
+            </p>
+          </div>
           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
             job.status === 'completed' ? 'bg-green-100 text-green-800' :
             job.status === 'processing' ? 'bg-blue-100 text-blue-800' :

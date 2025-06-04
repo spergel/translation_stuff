@@ -1,33 +1,9 @@
 {
-  "functions": {
-    "app/api/translate/route.ts": {
-      "maxDuration": 60,
-      "memory": 1024
-    },
-    "app/api/translate-chunk/route.ts": {
-      "maxDuration": 30,
-      "memory": 512
-    },
-    "app/api/generate-pdf/route.ts": {
-      "maxDuration": 60,
-      "memory": 512
-    },
-    "app/api/download-all-pdfs/route.ts": {
-      "maxDuration": 60,
-      "memory": 1024
-    },
-    "app/api/download-all-html/route.ts": {
-      "maxDuration": 60,
-      "memory": 512
-    },
-    "app/api/download-all-side-by-side-pdfs/route.ts": {
-      "maxDuration": 60,
-      "memory": 1024
+  "version": 2,
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/next"
     }
-  },
-  "build": {
-    "env": {
-      "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD": "true"
-    }
-  }
+  ]
 } 

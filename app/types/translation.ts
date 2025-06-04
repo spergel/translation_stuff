@@ -26,10 +26,14 @@ export interface TranslationMetadata {
 
 export interface TranslationJob {
   id: string
-  filename: string
+  file: {
+    name: string
+    type: string
+    size: number
+    blobUrl: string
+  }
   status: 'queued' | 'uploading' | 'processing' | 'completed' | 'error' | 'cancelled'
   progress: number
-  originalFile: File
   results?: TranslationResult[]
   error?: string
   currentPage?: number
@@ -38,10 +42,12 @@ export interface TranslationJob {
   metadata?: TranslationMetadata
   statusMessage?: string
   documentId?: string
-  queueJobId?: string
   translatedPdfUrl?: string
   translatedHtmlUrl?: string
   syncing?: boolean
+  createdAt: string
+  targetLanguage: TargetLanguage
+  queueJobId?: string
 }
 
 export type UserTier = 'free' | 'basic' | 'pro' | 'enterprise'

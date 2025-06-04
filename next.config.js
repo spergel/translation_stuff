@@ -7,8 +7,19 @@ const nextConfig = {
   
   // Increase memory limit for serverless functions processing large PDFs
   serverRuntimeConfig: {
-    maxDuration: 300, // 5 minutes max for PDF processing
+    maxDuration: 60, // 60 seconds max for Hobby plan
     redisConnectionString: process.env.REDIS_CONNECTION_STRING,
+    bodyParser: {
+      sizeLimit: '50mb'
+    }
+  },
+  
+  // Configure API routes
+  api: {
+    bodyParser: {
+      sizeLimit: '50mb' // Increase the size limit to 50MB
+    },
+    responseLimit: '50mb'
   },
   
   webpack: (config, { isServer }) => {

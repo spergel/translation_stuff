@@ -1,21 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { put } from '@vercel/blob';
 import { v4 as uuidv4 } from 'uuid';
 
-const UPLOAD_DIR = '/tmp/pdf-uploads'; // Temporary directory on the server
+// Maximum file size (25MB for free tier)
+const MAX_FILE_SIZE = 25 * 1024 * 1024;
 
-// Ensure the upload directory exists
-if (!fs.existsSync(UPLOAD_DIR)) {
-  try {
-    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-    console.log(`✅ Temporary upload directory created: ${UPLOAD_DIR}`);
-  } catch (error) {
-    console.error(`❌ Failed to create temporary upload directory ${UPLOAD_DIR}:`, error);
-    // Depending on the setup, you might want to throw an error here to prevent the app from starting
-    // or handle it by trying an alternative path.
-  }
-}
+// Route segment config
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const maxDuration = 60; // 60 seconds max for Hobby plan
 
 export async function POST(req: NextRequest) {
   try {
@@ -30,31 +23,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid file type. Only PDF files are accepted.' }, { status: 400 });
     }
 
-    // Generate a unique filename to prevent collisions
+    // Check file size
+    if (file.size > MAX_FILE_SIZE) {
+      return NextResponse.json({ 
+        error: `File too large. Maximum size is ${MAX_FILE_SIZE / (1024 * 1024)}MB.` 
+      }, { status: 413 });
+    }
+
+    // Generate a unique filename
     const uniqueFilename = `${uuidv4()}-${file.name.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
-    const tempFilePath = path.join(UPLOAD_DIR, uniqueFilename);
 
-    // Convert ArrayBuffer to Buffer and write to disk
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    
-    await fs.promises.writeFile(tempFilePath, buffer);
+    // Upload file directly to Vercel Blob
+    const blob = await put(uniqueFilename, file, {
+      access: 'public',
+    });
 
-    console.log(`📄 File "${file.name}" (size: ${file.size} bytes) uploaded temporarily to: ${tempFilePath}`);
+    console.log(`📄 File "${file.name}" (size: ${file.size} bytes) uploaded to blob: ${blob.url}`);
 
     return NextResponse.json({
-      message: 'File uploaded temporarily successfully',
-      tempFilePath,
+      message: 'File uploaded successfully',
+      blobUrl: blob.url,
       originalFilename: file.name,
       fileType: file.type,
       fileSize: file.size,
-    }, { status: 200 });
+    });
 
   } catch (error: any) {
-    console.error('❌ Error uploading temporary file:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred during temporary file upload.';
+    console.error('❌ Error uploading file:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred during file upload.';
     return NextResponse.json(
-      { error: `Failed to upload temporary file: ${errorMessage}` },
+      { error: `Failed to upload file: ${errorMessage}` },
       { status: 500 }
     );
   }
