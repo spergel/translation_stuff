@@ -1,5 +1,5 @@
 rq==1.9.0
-redis==4.5.4
+redis==3.5.3
 PyPDF2==3.0.1
 Pillow==10.2.0
 python-dotenv==1.0.1

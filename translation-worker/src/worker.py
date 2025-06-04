@@ -27,7 +27,7 @@ load_dotenv()
 # Configure Redis connection
 redis_conn = redis.Redis.from_url(
     os.getenv('REDIS_CONNECTION_STRING', ''),
-    ssl_cert_reqs=None,
+    ssl=True,
     decode_responses=True
 )
 
