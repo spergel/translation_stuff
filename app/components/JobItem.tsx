@@ -80,11 +80,11 @@ export default function JobItem({ job, onDelete, getAllJobs, downloadFormat }: J
     }
   }
 
-  const handleDownload = () => {
+  const handleDownload = (translationOnly = false) => {
     if (downloadFormat === 'pdf') {
-      downloads.downloadPDF(job)
+      downloads.downloadPDF(job, translationOnly)
     } else {
-      downloads.downloadHTML(job)
+      downloads.downloadHTML(job, translationOnly)
     }
   }
 
@@ -144,25 +144,18 @@ export default function JobItem({ job, onDelete, getAllJobs, downloadFormat }: J
                         Choose Download Format:
                       </div>
                       <button
-                        onClick={handleDownload}
+                        onClick={() => handleDownload(false)}
                         className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                       >
                         <div className="font-medium">Side-by-Side {downloadFormat === 'pdf' ? 'PDF' : 'HTML'}</div>
                         <div className="text-xs text-gray-500">Original image with translation</div>
                       </button>
                       <button
-                        onClick={() => downloads.downloadOriginalNextToTranscription(job)}
+                        onClick={() => handleDownload(true)}
                         className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                       >
-                        <div className="font-medium">Original + Transcription HTML</div>
-                        <div className="text-xs text-gray-500">Original image with transcribed text</div>
-                      </button>
-                      <button
-                        onClick={() => downloads.downloadOriginalTranscriptionTranslation(job)}
-                        className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                      >
-                        <div className="font-medium">Original + Transcription + Translation HTML</div>
-                        <div className="text-xs text-gray-500">Complete three-column analysis</div>
+                        <div className="font-medium">Translation Only {downloadFormat === 'pdf' ? 'PDF' : 'HTML'}</div>
+                        <div className="text-xs text-gray-500">Clean translation text only</div>
                       </button>
                     </div>
                   </div>

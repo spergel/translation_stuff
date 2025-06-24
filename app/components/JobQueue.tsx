@@ -11,8 +11,6 @@ interface JobQueueProps {
 }
 
 export default function JobQueue({ jobs, deleteJob, format }: JobQueueProps) {
-  const getAllJobs = () => jobs
-
   return (
     <div className="space-y-4">
       {jobs.map((job) => (
@@ -20,7 +18,6 @@ export default function JobQueue({ jobs, deleteJob, format }: JobQueueProps) {
           key={job.id} 
           job={job} 
           onDelete={deleteJob} 
-          getAllJobs={getAllJobs} 
           downloadFormat={format} 
         />
       ))}

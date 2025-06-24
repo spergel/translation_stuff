@@ -1,0 +1,39 @@
+[phases.setup]
+nixPkgs = [
+  "chromium",
+  "libx11",
+  "libxcomposite",
+  "libxcursor",
+  "libxdamage",
+  "libxext",
+  "libxfixes",
+  "libxi",
+  "libxrandr",
+  "libxrender",
+  "libxss",
+  "libxtst",
+  "ca-certificates",
+  "fonts-liberation",
+  "libappindicator3-1",
+  "libasound2",
+  "libatk-bridge2.0-0",
+  "libdrm2",
+  "libgtk-3-0",
+  "libnspr4",
+  "libnss3",
+  "libxss1",
+  "xdg-utils"
+]
+
+[phases.install]
+cmds = [
+  "npm ci --only=production"
+]
+
+[phases.build]
+cmds = [
+  "npm run build"
+]
+
+[start]
+cmd = "npm start" 

@@ -28,9 +28,9 @@ export const stripe = stripeInstance
 export const SUBSCRIPTION_PLANS = {
   free: {
     name: 'Free',
-    priceId: null, // No Stripe price for free tier
+    priceId: null,
     price: 0,
-    period: null, // No billing period for free
+    period: null,
     features: {
       documents: 5,
       storage: '5GB',
@@ -41,24 +41,6 @@ export const SUBSCRIPTION_PLANS = {
     },
     limits: {
       documentsCount: 5,
-      storageBytes: 5 * 1024 * 1024 * 1024, // 5GB
-    }
-  },
-  basic: {
-    name: 'Basic',
-    priceId: process.env.NEXT_PUBLIC_STRIPE_BASIC_PRICE_ID,
-    price: 4.99,
-    period: 'month',
-    features: {
-      documents: 50,
-      storage: '5GB',
-      retention: '1 year',
-      priority: 'Standard',
-      support: 'Email support',
-      extras: ['All free features', 'Priority queue access', 'Advanced translation settings'],
-    },
-    limits: {
-      documentsCount: 50,
       storageBytes: 5 * 1024 * 1024 * 1024, // 5GB
     }
   },
@@ -73,7 +55,14 @@ export const SUBSCRIPTION_PLANS = {
       retention: 'Unlimited',
       priority: 'Priority processing with Gemini 2.0 Flash',
       support: 'Priority support',
-      extras: ['All basic features', 'Batch processing', 'Custom glossaries', 'API access', 'Gemini 2.0 Flash translations'],
+      extras: [
+        'All free features',
+        'Batch processing',
+        'Custom glossaries',
+        'API access',
+        'Gemini 2.0 Flash translations',
+        'Advanced export options'
+      ],
     },
     limits: {
       documentsCount: 500,
@@ -83,19 +72,26 @@ export const SUBSCRIPTION_PLANS = {
   enterprise: {
     name: 'Enterprise',
     priceId: process.env.NEXT_PUBLIC_STRIPE_ENTERPRISE_PRICE_ID,
-    price: 19.99,
+    price: 49.99,
     period: 'month',
     features: {
       documents: 'Unlimited',
-      storage: '50GB',
+      storage: '100GB',
       retention: 'Unlimited',
-      priority: 'Premium processing with Gemini 2.0 Flash',
-      support: 'Priority support',
-      extras: ['All pro features', 'Custom API integration', 'Custom SLA', 'Gemini 2.0 Flash translations'],
+      priority: 'Highest priority with dedicated support',
+      support: '24/7 dedicated support',
+      extras: [
+        'All Pro features',
+        'Custom integrations',
+        'Dedicated account manager',
+        'SLA guarantees',
+        'Custom deployment options',
+        'Team management'
+      ],
     },
     limits: {
-      documentsCount: -1, // Unlimited
-      storageBytes: 50 * 1024 * 1024 * 1024, // 50GB
+      documentsCount: Infinity,
+      storageBytes: 100 * 1024 * 1024 * 1024, // 100GB
     }
   }
 } as const

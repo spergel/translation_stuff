@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState } from 'react'
-import { X, Download, ExternalLink } from 'lucide-react'
+import { X, Download, ExternalLink, Eye } from 'lucide-react'
 import { TranslationResult } from '../types/translation'
 
 interface DocumentViewerProps {
@@ -48,36 +48,30 @@ export default function DocumentViewer({ isOpen, onClose, document, results }: D
           <div className="flex items-center space-x-3">
             {document.status === 'completed' && (
               <>
-                {document.translatedHtmlUrl && (
-                  <button
-                    onClick={openFullView}
-                    className="btn btn-secondary btn-sm"
-                    title="Open in new tab"
-                  >
-                    <ExternalLink className="h-4 w-4" />
-                    View
-                  </button>
-                )}
-                {document.translatedPdfUrl && (
-                  <button
-                    onClick={() => downloadFile('pdf')}
-                    className="btn btn-secondary btn-sm"
-                    title="Download PDF"
-                  >
-                    <Download className="h-4 w-4" />
-                    PDF
-                  </button>
-                )}
-                {document.translatedHtmlUrl && (
-                  <button
-                    onClick={() => downloadFile('html')}
-                    className="btn btn-secondary btn-sm"
-                    title="Download HTML"
-                  >
-                    <Download className="h-4 w-4" />
-                    HTML
-                  </button>
-                )}
+                <button
+                  onClick={openFullView}
+                  className="btn btn-secondary btn-sm"
+                  title="View side by side"
+                >
+                  <Eye className="h-4 w-4" />
+                  Side by Side
+                </button>
+                <button
+                  onClick={() => downloadFile('pdf')}
+                  className="btn btn-secondary btn-sm"
+                  title="Download PDF"
+                >
+                  <Download className="h-4 w-4" />
+                  PDF
+                </button>
+                <button
+                  onClick={() => downloadFile('html')}
+                  className="btn btn-secondary btn-sm"
+                  title="Download HTML"
+                >
+                  <Download className="h-4 w-4" />
+                  HTML
+                </button>
               </>
             )}
             <button

@@ -1,119 +1,102 @@
-import { NextRequest, NextResponse } from 'next/server'
-import jsPDF from 'jspdf'
-import { generateSideBySideHTML } from '../../utils/htmlGenerators'
+import { NextRequest, NextResponse } from 'next/server';
+import puppeteer from 'puppeteer';
+import { generateHTML, generateTranslationOnlyHTML } from '../../utils/htmlGenerators';
+import { TranslationResult } from '../../types/translation';
 
-export async function POST(request: NextRequest) {
+// Fallback PDF generation using jsPDF and html2canvas
+async function generatePDFFallback(html: string, filename: string): Promise<Buffer> {
+  // This is a placeholder for the fallback method
+  // In a real implementation, you would use jsPDF and html2canvas
+  // For now, we'll throw an error to indicate the fallback is needed
+  throw new Error('Puppeteer failed, fallback method not implemented');
+}
+
+export async function POST(req: NextRequest) {
   try {
-    const { results, filename } = await request.json()
+    const body = await req.json();
+    const { results, filename, translationOnly } = body as { 
+      results: TranslationResult[], 
+      filename: string,
+      translationOnly?: boolean
+    };
 
-    if (!results || !results.length) {
-      return NextResponse.json(
-        { error: 'No translation results provided' },
-        { status: 400 }
-      )
+    if (!results || !filename) {
+      return NextResponse.json({ error: 'Missing results or filename' }, { status: 400 });
     }
 
-    console.log(`📄 Generating PDF for ${filename} with ${results.length} pages`)
+    const html = translationOnly 
+      ? generateTranslationOnlyHTML(results, filename)
+      : generateHTML(results, filename);
 
-    // Create new PDF document
-    const doc = new jsPDF({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: 'a4'
-    })
+    let pdf: Buffer | Uint8Array;
 
-    const pageWidth = doc.internal.pageSize.getWidth()
-    const pageHeight = doc.internal.pageSize.getHeight()
-    const margin = 20
-    const contentWidth = pageWidth - (margin * 2)
-
-    // Add title
-    doc.setFontSize(16)
-    doc.setFont('helvetica', 'bold')
-    doc.text(`Side-by-Side Translation: ${filename}`, margin, margin + 10)
-
-    let yPosition = margin + 30
-
-    // Process each page result
-    for (let i = 0; i < results.length; i++) {
-      const result = results[i]
+    try {
+      // Try puppeteer first
+      const browser = await puppeteer.launch({ 
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--single-process',
+          '--disable-gpu',
+          '--disable-web-security',
+          '--disable-features=VizDisplayCompositor'
+        ],
+        headless: true,
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser'
+      });
       
-      // Check if we need a new page
-      if (yPosition > pageHeight - 50) {
-        doc.addPage()
-        yPosition = margin + 10
-      }
-
-      // Page number header
-      doc.setFontSize(12)
-      doc.setFont('helvetica', 'bold')
-      doc.text(`Page ${result.page_number}`, margin, yPosition)
-      yPosition += 15
-
-      // Original section
-      doc.setFontSize(10)
-      doc.setFont('helvetica', 'bold')
-      doc.text('Original:', margin, yPosition)
-      yPosition += 8
-
-      // Add image if available (simplified approach)
-      if (result.page_image && result.page_image.length > 0) {
-        try {
-          // Add a note about the image
-          doc.setFont('helvetica', 'normal')
-          doc.text('[Original page image - see HTML version for full image]', margin + 5, yPosition)
-          yPosition += 10
-        } catch (error) {
-          console.log('Could not add image to PDF:', error)
-          doc.setFont('helvetica', 'italic')
-          doc.text('[Image available in HTML version]', margin + 5, yPosition)
-          yPosition += 10
+      const page = await browser.newPage();
+      
+      // Set viewport for consistent rendering
+      await page.setViewport({ width: 1200, height: 800 });
+      
+      await page.setContent(html, { waitUntil: 'networkidle0' });
+      
+      pdf = await page.pdf({ 
+        format: 'A4',
+        printBackground: true,
+        margin: {
+          top: '20mm',
+          right: '20mm',
+          bottom: '20mm',
+          left: '20mm'
         }
-      } else {
-        doc.setFont('helvetica', 'italic')
-        doc.text('[No image available]', margin + 5, yPosition)
-        yPosition += 10
-      }
+      });
 
-      yPosition += 5
-
-      // Translation section
-      doc.setFont('helvetica', 'bold')
-      doc.text('Translation:', margin, yPosition)
-      yPosition += 8
-
-      // Add translation text (with word wrapping)
-      doc.setFont('helvetica', 'normal')
-      const translationLines = doc.splitTextToSize(result.translated_text, contentWidth - 10)
-      doc.text(translationLines, margin + 5, yPosition)
-      yPosition += translationLines.length * 5 + 15
-
-      // Add separator line
-      if (i < results.length - 1) {
-        doc.setDrawColor(200, 200, 200)
-        doc.line(margin, yPosition, pageWidth - margin, yPosition)
-        yPosition += 10
+      await browser.close();
+    } catch (puppeteerError) {
+      console.error('Puppeteer failed, trying fallback method:', puppeteerError);
+      
+      // Try fallback method
+      try {
+        pdf = await generatePDFFallback(html, filename);
+      } catch (fallbackError) {
+        console.error('Fallback method also failed:', fallbackError);
+        const puppeteerMsg = puppeteerError instanceof Error ? puppeteerError.message : 'Unknown puppeteer error';
+        const fallbackMsg = fallbackError instanceof Error ? fallbackError.message : 'Unknown fallback error';
+        throw new Error(`PDF generation failed: ${puppeteerMsg}. Fallback also failed: ${fallbackMsg}`);
       }
     }
 
-    // Generate PDF buffer
-    const pdfBuffer = Buffer.from(doc.output('arraybuffer'))
-
-    console.log(`✅ PDF generated successfully: ${pdfBuffer.length} bytes`)
-
-    // Return PDF as response
-    return new NextResponse(pdfBuffer, {
+    return new NextResponse(pdf, {
+      status: 200,
       headers: {
         'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename.replace('.pdf', '')}_translated.pdf"`
-      }
-    })
-
+        'Content-Disposition': `attachment; filename="${filename}.pdf"`,
+      },
+    });
   } catch (error) {
-    console.error('PDF generation error:', error)
-    return NextResponse.json(
-      { error: 'Failed to generate PDF: ' + (error instanceof Error ? error.message : 'Unknown error') },
-      { status: 500 }
-    )
+    console.error('Error generating PDF:', error);
+    
+    // Return a more detailed error for debugging
+    return NextResponse.json({ 
+      error: 'Failed to generate PDF',
+      details: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined
+    }, { status: 500 });
   }
 } 
