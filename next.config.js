@@ -1,70 +1,72 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Vercel serverless function optimizations
+  output: 'standalone',
   experimental: {
-    serverComponentsExternalPackages: ['sharp', 'pdf-lib', 'canvas', 'pdfjs-serverless']
+    serverComponentsExternalPackages: ['sharp', 'pdf2pic', 'canvas']
   },
-  
-  // Increase memory limit for serverless functions processing large PDFs
-  serverRuntimeConfig: {
-    maxDuration: 60, // 60 seconds max for Hobby plan
-    redisConnectionString: process.env.REDIS_CONNECTION_STRING,
-    bodyParser: {
-      sizeLimit: '50mb'
-    }
+  env: {
+    // Map Firebase Functions config to environment variables
+    NEXTAUTH_URL: process.env.NEXTAUTH_URL || 'https://translation-461511.web.app',
+    NEXTAUTH_SECRET: process.env.NEXTAUTH_SECRET,
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
+    GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
   },
-  
-  // Configure API routes
-  api: {
-    bodyParser: {
-      sizeLimit: '50mb' // Increase the size limit to 50MB
-    },
-    responseLimit: '50mb'
-  },
-  
   webpack: (config, { isServer }) => {
-    // Handle PDF.js worker and canvas dependencies
-    if (!isServer) {
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        fs: false,
-        path: false,
-      }
-    }
-    
-    // For server-side, handle PDF.js properly
+    // Handle canvas and other problematic packages
     if (isServer) {
-      config.externals = config.externals || []
-      
-      // Don't externalize PDF.js related modules
       config.externals.push({
-        'pdfjs-dist/build/pdf.worker.js': 'commonjs pdfjs-dist/build/pdf.worker.js',
-        'pdfjs-dist/legacy/build/pdf.worker.js': 'commonjs pdfjs-dist/legacy/build/pdf.worker.js'
+        'utf-8-validate': 'commonjs utf-8-validate',
+        'bufferutil': 'commonjs bufferutil',
+        'canvas': 'commonjs canvas',
       })
-      
-      // Handle canvas
-      if (!config.externals.includes('canvas')) {
-        config.externals.push('canvas')
-      }
-      
-      // Optimize for serverless function size and performance
-      config.optimization = {
-        ...config.optimization,
-        // Don't split chunks for serverless functions
-        splitChunks: false,
-      }
     }
-    
-    // Copy PDF.js worker files to the output directory
-    config.module.rules.push({
-      test: /pdf\.worker\.(min\.)?js/,
-      type: 'asset/resource',
-      generator: {
-        filename: 'static/worker/[hash][ext][query]',
-      },
-    })
-    
+
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      fs: false,
+      path: false,
+      crypto: false,
+    }
+
     return config
+  },
+  images: {
+    domains: ['lh3.googleusercontent.com'], // Allow Google profile images
+  },
+  // Disable static optimization for API routes with dynamic behavior
+  trailingSlash: false,
+  poweredByHeader: false,
+  compress: true,
+  
+  // Handle PDF.js worker files
+  async headers() {
+    return [
+      {
+        source: '/js/pdf.worker.min.js',
+        headers: [
+          {
+            key: 'Cross-Origin-Embedder-Policy',
+            value: 'require-corp',
+          },
+          {
+            key: 'Cross-Origin-Opener-Policy', 
+            value: 'same-origin',
+          },
+        ],
+      },
+    ]
+  },
+
+  // Redirect configuration
+  async redirects() {
+    return [
+      {
+        source: '/login',
+        destination: '/auth/signin',
+        permanent: true,
+      },
+    ]
   },
 }
 

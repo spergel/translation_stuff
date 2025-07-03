@@ -23,11 +23,7 @@ export default function DownloadAllButton({ jobs, format, className = "btn btn-p
   }
 
   const handleDownloadAll = () => {
-    if (format === 'pdf') {
-      downloads.downloadAllAsPDF(jobs)
-    } else {
-      downloads.downloadAllAsHTML(jobs, 'original_translation')
-    }
+    downloads.downloadAll(jobs, format)
   }
 
   return (

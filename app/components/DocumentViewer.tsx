@@ -139,29 +139,18 @@ export default function DocumentViewer({ isOpen, onClose, document, results }: D
                       <div>
                         <h4 className="text-sm font-medium text-primary-200 mb-2">Original</h4>
                         <div className="bg-white p-3 rounded border text-sm max-h-32 overflow-y-auto">
-                          {result.original_text?.substring(0, 200) || 'No text extracted'}
-                          {result.original_text && result.original_text.length > 200 && '...'}
+                          No original text available in current format
                         </div>
                       </div>
                       
                       <div>
                         <h4 className="text-sm font-medium text-primary-200 mb-2">Translation</h4>
                         <div className="bg-white p-3 rounded border text-sm max-h-32 overflow-y-auto">
-                          {result.translated_text?.substring(0, 200) || 'No translation available'}
-                          {result.translated_text && result.translated_text.length > 200 && '...'}
+                          {result.translation?.substring(0, 200) || 'No translation available'}
+                          {result.translation && result.translation.length > 200 && '...'}
                         </div>
                       </div>
                     </div>
-                    
-                    {result.notes && (
-                      <div className="mt-3">
-                        <h4 className="text-sm font-medium text-amber-700 mb-1">Notes</h4>
-                        <div className="bg-amber-50 p-2 rounded text-sm text-amber-800">
-                          {result.notes.substring(0, 150)}
-                          {result.notes.length > 150 && '...'}
-                        </div>
-                      </div>
-                    )}
                   </div>
                 ))}
                 

@@ -33,7 +33,7 @@ export function useTranslationJobs() {
 
     const jobsQuery = query(
       collection(db, 'translationJobs'),
-      where('userId', '==', user.uid),
+      where('userId', '==', user.id),
       orderBy('createdAt', 'desc')
     )
 

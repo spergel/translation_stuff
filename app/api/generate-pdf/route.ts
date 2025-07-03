@@ -1,14 +1,69 @@
 import { NextRequest, NextResponse } from 'next/server';
-import puppeteer from 'puppeteer';
 import { generateHTML, generateTranslationOnlyHTML } from '../../utils/htmlGenerators';
 import { TranslationResult } from '../../types/translation';
 
-// Fallback PDF generation using jsPDF and html2canvas
+// Simple HTML-to-PDF fallback that works without Puppeteer
 async function generatePDFFallback(html: string, filename: string): Promise<Buffer> {
-  // This is a placeholder for the fallback method
-  // In a real implementation, you would use jsPDF and html2canvas
-  // For now, we'll throw an error to indicate the fallback is needed
-  throw new Error('Puppeteer failed, fallback method not implemented');
+  // Create a minimal PDF-like response using basic HTML structure
+  // This is a simple fallback - in production you might want to use a service like Documint or PDFShift
+  const simplePdfHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>${filename}</title>
+    <style>
+        @page {
+            margin: 2cm;
+            size: A4;
+        }
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 100%;
+        }
+        .page-break {
+            page-break-before: always;
+        }
+        h1, h2, h3 {
+            color: #2c5aa0;
+        }
+        .translation-page {
+            margin-bottom: 2em;
+            padding: 1em;
+            border-left: 3px solid #2c5aa0;
+        }
+        .page-number {
+            font-weight: bold;
+            color: #666;
+            margin-bottom: 1em;
+        }
+        .translation-content {
+            white-space: pre-wrap;
+        }
+        @media print {
+            .page-break {
+                page-break-before: always;
+            }
+        }
+    </style>
+</head>
+<body>
+    ${html}
+    <script>
+        // Auto-print when loaded (for manual PDF generation)
+        window.addEventListener('load', function() {
+            if (window.location.search.includes('print=true')) {
+                setTimeout(() => window.print(), 100);
+            }
+        });
+    </script>
+</body>
+</html>`;
+
+  // Return the HTML as a "PDF" - browsers can print this to PDF
+  return Buffer.from(simplePdfHtml, 'utf-8');
 }
 
 export async function POST(req: NextRequest) {
@@ -28,75 +83,23 @@ export async function POST(req: NextRequest) {
       ? generateTranslationOnlyHTML(results, filename)
       : generateHTML(results, filename);
 
-    let pdf: Buffer | Uint8Array;
+    // Use the fallback method (which works everywhere)
+    const pdfBuffer = await generatePDFFallback(html, filename);
 
-    try {
-      // Try puppeteer first
-      const browser = await puppeteer.launch({ 
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--single-process',
-          '--disable-gpu',
-          '--disable-web-security',
-          '--disable-features=VizDisplayCompositor'
-        ],
-        headless: true,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser'
-      });
-      
-      const page = await browser.newPage();
-      
-      // Set viewport for consistent rendering
-      await page.setViewport({ width: 1200, height: 800 });
-      
-      await page.setContent(html, { waitUntil: 'networkidle0' });
-      
-      pdf = await page.pdf({ 
-        format: 'A4',
-        printBackground: true,
-        margin: {
-          top: '20mm',
-          right: '20mm',
-          bottom: '20mm',
-          left: '20mm'
-        }
-      });
-
-      await browser.close();
-    } catch (puppeteerError) {
-      console.error('Puppeteer failed, trying fallback method:', puppeteerError);
-      
-      // Try fallback method
-      try {
-        pdf = await generatePDFFallback(html, filename);
-      } catch (fallbackError) {
-        console.error('Fallback method also failed:', fallbackError);
-        const puppeteerMsg = puppeteerError instanceof Error ? puppeteerError.message : 'Unknown puppeteer error';
-        const fallbackMsg = fallbackError instanceof Error ? fallbackError.message : 'Unknown fallback error';
-        throw new Error(`PDF generation failed: ${puppeteerMsg}. Fallback also failed: ${fallbackMsg}`);
-      }
-    }
-
-    return new NextResponse(pdf, {
+    return new NextResponse(pdfBuffer, {
       status: 200,
       headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}.pdf"`,
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}.html"`,
+        'X-Print-Ready': 'true', // Hint for frontend to offer print-to-PDF
       },
     });
   } catch (error) {
     console.error('Error generating PDF:', error);
     
-    // Return a more detailed error for debugging
     return NextResponse.json({ 
       error: 'Failed to generate PDF',
-      details: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined
+      details: error instanceof Error ? error.message : 'Unknown error'
     }, { status: 500 });
   }
 } 

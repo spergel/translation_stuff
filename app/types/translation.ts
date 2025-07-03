@@ -2,38 +2,28 @@ export type TargetLanguage = 'english' | 'spanish' | 'french' | 'german' | 'ital
 
 export type UserTier = 'free' | 'pro' | 'enterprise'
 
-export interface TranslationResult {
+export interface ChapterInfo {
   page_number: number
-  translation: string
-  page_image?: string
-  pdfUrl?: string
-  htmlUrl?: string
+  title: string
+  position: 'top' | 'middle' | 'bottom'
+  confidence: number // 0-1, how confident the AI is about this being a chapter
 }
 
-export interface TranslationJob {
-  id: string
-  file: {
-    name: string
-    type: string
-    size: number
-    blobUrl: string
-  }
-  status: 'processing' | 'completed' | 'error' | 'cancelled' | 'uploading' | 'queued'
-  progress: number
-  results?: TranslationResult[]
-  error?: string
-  statusMessage?: string
-  syncing?: boolean
-  targetLanguage: TargetLanguage
-  createdAt: string
-  updatedAt: string
-  queueJobId?: string
+export interface TranslationResult {
+  page_number: number
+  original_text: string  // Extracted/transcribed text from the image
+  translation: string   // AI translation of the extracted text
+  pdfUrl?: string
+  htmlUrl?: string
+  isChapterStart?: boolean // Whether this page starts a new chapter
+  chapterInfo?: ChapterInfo // Chapter details if this page starts a chapter
 }
 
 export interface TranslationMetadata {
   document_title?: string
   total_pages?: number
   target_language?: string
+  userTier?: UserTier
 }
 
 export interface TranslationJob {
@@ -58,6 +48,6 @@ export interface TranslationJob {
   translatedHtmlUrl?: string
   syncing?: boolean
   createdAt: string
+  updatedAt: string
   targetLanguage: TargetLanguage
-  queueJobId?: string
 } 

@@ -4,22 +4,22 @@ import Stripe from 'stripe'
 let stripeInstance: Stripe | null = null
 
 if (typeof window === 'undefined') {
-  if (!process.env.STRIPE_SECRET_KEY) {
-    throw new Error('STRIPE_SECRET_KEY is not set in environment variables')
-  }
-  
-  // Log available environment variables (but not their values)
-  console.log('Available Stripe-related env vars:', {
-    STRIPE_SECRET_KEY: !!process.env.STRIPE_SECRET_KEY,
-    NEXT_PUBLIC_STRIPE_BASIC_PRICE_ID: !!process.env.NEXT_PUBLIC_STRIPE_BASIC_PRICE_ID,
-    NEXT_PUBLIC_STRIPE_PRO_PRICE_ID: !!process.env.NEXT_PUBLIC_STRIPE_PRO_PRICE_ID,
-    NEXT_PUBLIC_STRIPE_ENTERPRISE_PRICE_ID: !!process.env.NEXT_PUBLIC_STRIPE_ENTERPRISE_PRICE_ID,
-  })
+  if (process.env.STRIPE_SECRET_KEY) {
+    // Log available environment variables (but not their values)
+    console.log('Available Stripe-related env vars:', {
+      STRIPE_SECRET_KEY: !!process.env.STRIPE_SECRET_KEY,
+      NEXT_PUBLIC_STRIPE_BASIC_PRICE_ID: !!process.env.NEXT_PUBLIC_STRIPE_BASIC_PRICE_ID,
+      NEXT_PUBLIC_STRIPE_PRO_PRICE_ID: !!process.env.NEXT_PUBLIC_STRIPE_PRO_PRICE_ID,
+      NEXT_PUBLIC_STRIPE_ENTERPRISE_PRICE_ID: !!process.env.NEXT_PUBLIC_STRIPE_ENTERPRISE_PRICE_ID,
+    })
 
-  stripeInstance = new Stripe(process.env.STRIPE_SECRET_KEY, {
-    apiVersion: '2025-05-28.basil',
-    typescript: true,
-  })
+    stripeInstance = new Stripe(process.env.STRIPE_SECRET_KEY, {
+      apiVersion: '2025-05-28.basil',
+      typescript: true,
+    })
+  } else {
+    console.warn('STRIPE_SECRET_KEY is not set - Stripe functionality will be limited')
+  }
 }
 
 export const stripe = stripeInstance
@@ -33,7 +33,7 @@ export const SUBSCRIPTION_PLANS = {
     period: null,
     features: {
       documents: 5,
-      storage: '5GB',
+      storage: '1GB',
       retention: '30 days',
       priority: 'Standard',
       support: 'Community',
@@ -41,7 +41,7 @@ export const SUBSCRIPTION_PLANS = {
     },
     limits: {
       documentsCount: 5,
-      storageBytes: 5 * 1024 * 1024 * 1024, // 5GB
+      storageBytes: 1 * 1024 * 1024 * 1024, // 1GB
     }
   },
   pro: {
@@ -51,7 +51,7 @@ export const SUBSCRIPTION_PLANS = {
     period: 'month',
     features: {
       documents: 500,
-      storage: '25GB',
+      storage: '5GB',
       retention: 'Unlimited',
       priority: 'Priority processing with Gemini 2.0 Flash',
       support: 'Priority support',
@@ -66,7 +66,7 @@ export const SUBSCRIPTION_PLANS = {
     },
     limits: {
       documentsCount: 500,
-      storageBytes: 25 * 1024 * 1024 * 1024, // 25GB
+      storageBytes: 5 * 1024 * 1024 * 1024, // 5GB
     }
   },
   enterprise: {
@@ -76,7 +76,7 @@ export const SUBSCRIPTION_PLANS = {
     period: 'month',
     features: {
       documents: 'Unlimited',
-      storage: '100GB',
+      storage: '25GB',
       retention: 'Unlimited',
       priority: 'Highest priority with dedicated support',
       support: '24/7 dedicated support',
@@ -91,7 +91,7 @@ export const SUBSCRIPTION_PLANS = {
     },
     limits: {
       documentsCount: Infinity,
-      storageBytes: 100 * 1024 * 1024 * 1024, // 100GB
+      storageBytes: 25 * 1024 * 1024 * 1024, // 25GB
     }
   }
 } as const

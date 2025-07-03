@@ -141,7 +141,7 @@ p {
 }
 
 .btn-accent {
-  @apply bg-accent-300 text-white hover:bg-accent-400;
+  @apply bg-primary-300 text-white hover:bg-primary-400;
 }
 
 .btn-error {

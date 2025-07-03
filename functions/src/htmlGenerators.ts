@@ -1,4 +1,4 @@
-import { TranslationResult } from '../types/translation'
+import { TranslationResult } from '../../app/types/translation'
 
 export function generateHTML(results: TranslationResult[], filename: string): string {
   return `

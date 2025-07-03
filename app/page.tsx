@@ -1,21 +1,20 @@
 'use client'
 
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, Trash2, Lock, Save, User, Check, CreditCard } from 'lucide-react'
 import { useSession } from 'next-auth/react'
-import { extractImagesFromPDF } from './utils/pdfUtils'
 import { TranslationResult, TranslationJob, TranslationMetadata, TargetLanguage, UserTier } from './types/translation'
 import JobItem from './components/JobItem'
 import DownloadAllButton from './components/DownloadAllButton'
 import { processDocumentChunked } from './utils/chunkedTranslation'
-import FileStorageManager from './utils/fileStorage'
 import JobQueue from './components/JobQueue'
 import TranslationSettings from './components/TranslationSettings'
 import Header from './components/Header'
 import LoginButton from './components/auth/LoginButton'
 import Link from 'next/link'
 import { SUBSCRIPTION_PLANS } from './lib/stripe'
+import { useChapterDetection } from './hooks/useChapterDetection'
 
 export default function Home() {
   const { data: session, status } = useSession()
@@ -26,6 +25,30 @@ export default function Home() {
 
   // Get user tier from session, fallback to free for anonymous users
   const userTier: UserTier = (session?.user?.tier as UserTier) || 'free'
+  
+  // Chapter detection hook
+  const { triggerChapterDetection, shouldTriggerChapterDetection } = useChapterDetection()
+
+  // Prevent page unload when jobs are processing
+  useEffect(() => {
+    const hasProcessingJobs = jobs.some(job => job.status === 'processing');
+    
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasProcessingJobs) {
+        e.preventDefault();
+        e.returnValue = 'You have active translations in progress. Leaving this page will lose your work. Are you sure?';
+        return 'You have active translations in progress. Leaving this page will lose your work. Are you sure?';
+      }
+    };
+
+    if (hasProcessingJobs) {
+      window.addEventListener('beforeunload', handleBeforeUnload);
+    }
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [jobs]);
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const tierLimits = {
@@ -60,7 +83,7 @@ export default function Home() {
       }
 
       try {
-        // Upload directly to Vercel Blob
+        // Upload directly to Vercel Blob for temporary storage
         const formData = new FormData();
         formData.append('file', file);
         
@@ -126,20 +149,22 @@ export default function Home() {
           targetLanguage: selectedLanguage,
           documentId,
           abortController,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
         };
 
         newJobs.push(newJob);
 
-        // Start translation process
+        // Start translation process with Firebase
         processDocumentChunked({
           file,
           targetLanguage: selectedLanguage,
           userTier,
+          userId: session?.user?.id, // Pass userId directly instead of using global variable
           onProgress: (progress, message) => {
             setJobs(prevJobs => prevJobs.map(job => 
               job.id === jobId 
-                ? { ...job, progress, status: message as any }
+                ? { ...job, progress, status: 'processing' as const }
                 : job
             ));
           },
@@ -151,6 +176,24 @@ export default function Home() {
             ));
           },
           signal: abortController.signal
+        }).then(async (results) => {
+          // Update job status to completed
+          setJobs(prevJobs => prevJobs.map(job => 
+            job.id === jobId 
+              ? { ...job, status: 'completed', progress: 100, results }
+              : job
+          ));
+
+          // Trigger chapter detection for paid users if we have a documentId
+          if (documentId && userTier !== 'free' && results && results.length > 0) {
+            console.log('🔍 Triggering chapter detection for completed translation:', documentId);
+            try {
+              await triggerChapterDetection(documentId);
+            } catch (error) {
+              console.error('❌ Chapter detection failed, but translation is complete:', error);
+              // Don't fail the translation if chapter detection fails
+            }
+          }
         }).catch(error => {
           console.error(`Translation failed for ${originalFilename}:`, error);
           setJobs(prevJobs => prevJobs.map(job => 
@@ -204,25 +247,27 @@ export default function Home() {
 
     try {
       console.log(`[DB Update] Starting PDF generation for ${documentId}`);
-      const pdfUploadResult = await FileStorageManager.generateAndUploadPDF(
-        userId,
-        documentId,
-        results,
-        originalFilename
-      );
-      translatedPdfUrl = pdfUploadResult.url;
-      console.log(`[DB Update] PDF ready: ${translatedPdfUrl}`);
+      // TODO: Implement Firebase Storage PDF generation
+      // const pdfUploadResult = await FirebaseStorageManager.generateAndUploadPDF(
+      //   userId,
+      //   documentId,
+      //   results,
+      //   originalFilename
+      // );
+      // translatedPdfUrl = pdfUploadResult.url;
+      console.log(`[DB Update] PDF generation temporarily disabled during migration`);
 
       console.log(`[DB Update] Starting HTML generation for ${documentId}`);
-      const htmlUploadResult = await FileStorageManager.generateAndUploadHTML(
-        userId,
-        documentId,
-        results,
-        originalFilename,
-        targetLanguage
-      );
-      translatedHtmlUrl = htmlUploadResult.url;
-      console.log(`[DB Update] HTML ready: ${translatedHtmlUrl}`);
+      // TODO: Implement Firebase Storage HTML generation
+      // const htmlUploadResult = await FirebaseStorageManager.generateAndUploadHTML(
+      //   userId,
+      //   documentId,
+      //   results,
+      //   originalFilename,
+      //   targetLanguage
+      // );
+      // translatedHtmlUrl = htmlUploadResult.url;
+      console.log(`[DB Update] HTML generation temporarily disabled during migration`);
       
       const payload = {
         status: 'completed',
@@ -288,105 +333,7 @@ export default function Home() {
     }
   };
 
-  // Add polling function
-  const pollJobStatus = async (queueJobId: string, localJobId: string) => {
-    const pollInterval = setInterval(async () => {
-      try {
-        const response = await fetch(`/api/translate?jobId=${queueJobId}`);
-        if (!response.ok) {
-          const errorText = await response.text(); 
-          throw new Error(`Failed to get job status: ${response.status} ${errorText}`);
-        }
-        const jobStatusData = await response.json() as { 
-          state: 'completed' | 'failed' | 'active' | 'waiting' | 'delayed' | 'paused'; 
-          progress: number; 
-          result?: TranslationResult[];
-          failedReason?: string;
-          processedOn?: string;
-          finishedOn?: string;
-        };
-
-        setJobs(prevJobs => prevJobs.map(job => {
-          if (job.id === localJobId) {
-            const updatedJob = { ...job };
-            switch (jobStatusData.state) {
-              case 'completed':
-                updatedJob.status = 'completed';
-                updatedJob.progress = 100;
-                updatedJob.results = jobStatusData.result;
-                updatedJob.statusMessage = 'Syncing with server...';
-                updatedJob.syncing = true;
-                clearInterval(pollInterval);
-                if (updatedJob.documentId && session?.user?.id && updatedJob.results && updatedJob.results.length > 0) {
-                  let jobProcessingTimeMs: number | undefined = undefined;
-                  if (jobStatusData.finishedOn && jobStatusData.processedOn) {
-                    jobProcessingTimeMs = new Date(jobStatusData.finishedOn).getTime() - new Date(jobStatusData.processedOn).getTime();
-                  }
-                  updateCompletedDocumentInDB(
-                    updatedJob.documentId,
-                    updatedJob.results,
-                    updatedJob.file.name,
-                    selectedLanguage,
-                    session.user.id,
-                    jobProcessingTimeMs,
-                    localJobId
-                  ).catch(error => {
-                    setJobs(prev => prev.map(job => job.id === localJobId ? {
-                      ...job, status: 'error', error: 'Failed to finalize completion.', statusMessage: 'Error saving results.', syncing: false
-                    } : job));
-                  });
-                } else if (!updatedJob.results || updatedJob.results.length === 0) {
-                  updatedJob.status = 'error';
-                  updatedJob.error = 'Completed with no translation data.';
-                  updatedJob.statusMessage = 'Error: No translation data received.';
-                  updatedJob.syncing = false;
-                } else if (!updatedJob.documentId || !session?.user?.id) {
-                  updatedJob.statusMessage = 'Completed (not saved to account).';
-                  updatedJob.syncing = false;
-                }
-                break;
-              case 'failed':
-                updatedJob.status = 'error';
-                updatedJob.error = jobStatusData.failedReason || 'Translation failed in worker';
-                updatedJob.statusMessage = `Error: ${jobStatusData.failedReason || 'Translation failed'}`;
-                clearInterval(pollInterval);
-                break;
-              case 'active':
-                updatedJob.status = 'processing';
-                updatedJob.progress = jobStatusData.progress || 0;
-                updatedJob.statusMessage = 'Processing...';
-                break;
-              case 'waiting': // Added other bullmq states for completeness
-              case 'delayed':
-              case 'paused':
-                updatedJob.status = 'queued';
-                updatedJob.progress = 0;
-                updatedJob.statusMessage = `Queued (${jobStatusData.state})...`;
-                break;
-            }
-            return updatedJob;
-          }
-          return job;
-        }));
-      } catch (error) {
-        console.error(`Error polling job status for ${localJobId} (queue ID: ${queueJobId}):`, error);
-        // Clear interval for this job on error to prevent infinite loops if API is down
-        clearInterval(pollInterval);
-        // Optionally update job state to show an error
-        setJobs(prevJobs => prevJobs.map(job => {
-          if (job.id === localJobId) {
-            return {
-              ...job,
-              status: 'error' as const,
-              error: `Polling failed: ${error instanceof Error ? error.message : 'Unknown polling error'}`,
-              statusMessage: 'Error fetching update. Please check connection.'
-            };
-          }
-          return job;
-        }));
-      }
-    }, 3000);
-  };
+  // Note: pollJobStatus function removed - Firebase function handles translation synchronously
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -403,23 +350,6 @@ export default function Home() {
       // Show confirmation for active translations
       if (!confirm('This translation is in progress. Are you sure you want to cancel it?')) {
         return
-      }
-
-      // If job has a queue ID, cancel it in Redis
-      if (job.queueJobId) {
-        try {
-          const response = await fetch(`/api/translate?jobId=${job.queueJobId}`, {
-            method: 'DELETE'
-          });
-
-          if (!response.ok) {
-            throw new Error('Failed to cancel job');
-          }
-        } catch (error) {
-          console.error('Error cancelling job:', error);
-          alert('Failed to cancel job. Please try again.');
-          return;
-        }
       }
 
       // Abort any ongoing fetch requests
@@ -569,13 +499,11 @@ export default function Home() {
                     <div className="text-sm text-primary-200 mb-1">
                       {userTier === 'free'
                         ? 'Free tier: 1 file at a time, 25MB max per file'
-                        : userTier === 'basic'
-                          ? 'Basic tier: up to 3 files at a time, 25MB max per file'
-                          : userTier === 'pro'
-                            ? 'Pro tier: up to 10 files at a time, 100MB max per file'
-                            : userTier === 'enterprise'
-                              ? 'Enterprise: up to 50 files at a time, 2GB max per file'
-                              : 'Guest: 1 file, 5MB max'}
+                        : userTier === 'pro'
+                          ? 'Pro tier: up to 10 files at a time, 100MB max per file'
+                          : userTier === 'enterprise'
+                            ? 'Enterprise: up to 50 files at a time, 2GB max per file'
+                            : 'Guest: 1 file, 5MB max'}
                       {session.user.isEduEmail && <span className="ml-2 text-emerald-600">(.edu account)</span>}
                     </div>
                     {session && (
@@ -603,6 +531,40 @@ export default function Home() {
             <div className="flex items-center justify-center p-8">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-400"></div>
               <span className="ml-3 text-primary-200">Loading...</span>
+            </div>
+          </div>
+        )}
+
+        {/* Stay on Page Warning - Shows when jobs are processing */}
+        {jobs.some(job => job.status === 'processing') && (
+          <div className="mb-8">
+            <div className="bg-gradient-to-r from-red-50 to-orange-50 border-2 border-red-200 rounded-lg p-6 shadow-md">
+              <div className="flex items-center space-x-4">
+                <div className="flex-shrink-0">
+                  <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center animate-pulse">
+                    <span className="text-red-600 text-xl font-bold">⚠️</span>
+                  </div>
+                </div>
+                <div className="flex-1">
+                  <div className="text-lg font-semibold text-red-900 mb-2">
+                    ⛔ IMPORTANT: Stay on this page during translation!
+                  </div>
+                  <div className="text-sm text-red-800 leading-relaxed">
+                    <div className="mb-1">
+                      <strong>• Do NOT close this tab or navigate away</strong> - your translation will be lost
+                    </div>
+                    <div className="mb-1">
+                      <strong>• Keep your computer/phone awake</strong> - translation happens in your browser
+                    </div>
+                    <div>
+                      <strong>• Large documents may take several minutes</strong> - please be patient
+                    </div>
+                  </div>
+                </div>
+                <div className="flex-shrink-0">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-500"></div>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -639,22 +601,19 @@ export default function Home() {
                   </label>
                 </div>
               )}
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="section-header mb-0">Translation Progress</h2>
-                <div className="flex items-center space-x-3">
-                  <DownloadAllButton 
-                    jobs={jobs} 
-                    format={globalDownloadFormat}
-                    className="btn btn-secondary btn-sm"
-                  />
-                  <button
-                    onClick={clearAllJobs}
-                    className="btn btn-secondary btn-sm flex items-center space-x-2"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    <span>Clear All</span>
-                  </button>
-                </div>
+              <div className="flex flex-col space-y-2 sm:flex-row sm:space-x-3 sm:space-y-0 items-stretch sm:items-center">
+                <DownloadAllButton 
+                  jobs={jobs} 
+                  format={globalDownloadFormat}
+                  className="btn btn-secondary btn-sm w-full sm:w-auto"
+                />
+                <button
+                  onClick={clearAllJobs}
+                  className="btn btn-secondary btn-sm flex items-center space-x-2 w-full sm:w-auto"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  <span>Clear All</span>
+                </button>
               </div>
               <JobQueue jobs={jobs} deleteJob={deleteJob} format={globalDownloadFormat} />
             </div>

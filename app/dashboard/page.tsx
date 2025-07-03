@@ -176,7 +176,7 @@ export default function Dashboard() {
   }
 
   const getStorageUsagePercent = () => {
-    const storageUsedMB = Number(session.user.storageUsedBytes) / (1024 * 1024)
+    const storageUsedMB = isNaN(Number(session.user.storageUsedBytes)) ? 0 : Number(session.user.storageUsedBytes) / (1024 * 1024)
     const tierLimits = {
       free: 5 * 1024, // 5GB in MB
       basic: 5 * 1024, // 5GB in MB
@@ -237,14 +237,12 @@ export default function Dashboard() {
               <FileText className="h-8 w-8 text-amber-600" />
               <div className="ml-4">
                 <p className="text-sm font-medium text-primary-300">Documents</p>
-                <p className="text-2xl font-bold text-primary-300">
-                  {session.user.documentsCount}
-                  {session.user.tier !== 'enterprise' && (
-                    <span className="text-sm font-normal text-primary-200">
-                      /{session.user.tier === 'free' ? 5 : session.user.tier === 'basic' ? 50 : 500}
-                    </span>
-                  )}
-                </p>
+                <div className="flex flex-col items-center justify-center">
+                  <span className="text-3xl font-bold text-primary-300">
+                    {(session.user.documentsCount ?? 0)}
+                  </span>
+                  <span className="text-sm text-primary-200">/500</span>
+                </div>
               </div>
             </div>
           </div>
@@ -264,6 +262,12 @@ export default function Dashboard() {
                       : 5 * 1024 * 1024 * 1024  // 5GB for free and basic
                   }
                 />
+                <div className="flex flex-col items-center justify-center">
+                  <span className="text-3xl font-bold text-primary-300">
+                    {isNaN(Number(session.user.storageUsedBytes)) ? 0 : Math.round(Number(session.user.storageUsedBytes) / (1024 * 1024))} MB
+                  </span>
+                  <span className="text-sm text-primary-200">of 5GB</span>
+                </div>
               </div>
             </div>
           </div>
@@ -274,11 +278,22 @@ export default function Dashboard() {
               <div className="ml-4">
                 <p className="text-sm font-medium text-primary-300">Plan</p>
                 <p className="text-2xl font-bold text-primary-300 capitalize">
-                  {session.user.tier}
+                  {SUBSCRIPTION_PLANS[session.user.tier as keyof typeof SUBSCRIPTION_PLANS]?.name || session.user.tier}
                   {session.user.isEduEmail && (
                     <span className="text-sm font-normal text-emerald-600 ml-1">(.edu)</span>
                   )}
                 </p>
+                <p className="text-sm text-primary-200 mt-1">
+                  {SUBSCRIPTION_PLANS[session.user.tier as keyof typeof SUBSCRIPTION_PLANS]?.features?.priority}
+                </p>
+                <p className="text-xs text-primary-200 mt-1">
+                  {SUBSCRIPTION_PLANS[session.user.tier as keyof typeof SUBSCRIPTION_PLANS]?.features?.storage} storage, {SUBSCRIPTION_PLANS[session.user.tier as keyof typeof SUBSCRIPTION_PLANS]?.features?.documents} docs
+                </p>
+                {SUBSCRIPTION_PLANS[session.user.tier as keyof typeof SUBSCRIPTION_PLANS]?.price > 0 && (
+                  <p className="text-xs text-primary-200 mt-1">
+                    ${SUBSCRIPTION_PLANS[session.user.tier as keyof typeof SUBSCRIPTION_PLANS]?.price}/{SUBSCRIPTION_PLANS[session.user.tier as keyof typeof SUBSCRIPTION_PLANS]?.period}
+                  </p>
+                )}
               </div>
             </div>
           </div>

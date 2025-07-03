@@ -55,7 +55,7 @@ export default function Header() {
                   )}
                 </div>
                 <div className="text-xs text-primary-200 font-mono">
-                  {session.user.documentsCount} docs • {Math.round(Number(session.user.storageUsedBytes) / (1024 * 1024))}MB used
+                  {(session.user.documentsCount ?? 0)} docs • {(isNaN(Number(session.user.storageUsedBytes)) ? 0 : Math.round(Number(session.user.storageUsedBytes) / (1024 * 1024)))}MB used
                 </div>
               </div>
             )}

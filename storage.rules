@@ -25,6 +25,19 @@ service firebase.storage {
       allow delete: if isAuthenticated() && isOwner(userId);
     }
     
+    // Temporary file uploads (accessible by all users for processing)
+    match /temp/{fileName} {
+      allow read, write: if true; // Allow anonymous uploads for translation processing
+      allow delete: if true; // Allow cleanup
+    }
+    
+    // User uploads folder (for authenticated users)
+    match /users/{userId}/uploads/{fileName} {
+      allow read: if isAuthenticated() && isOwner(userId);
+      allow write: if isAuthenticated() && isOwner(userId);
+      allow delete: if isAuthenticated() && isOwner(userId);
+    }
+    
     // Default deny
     match /{allPaths=**} {
       allow read, write: if false;

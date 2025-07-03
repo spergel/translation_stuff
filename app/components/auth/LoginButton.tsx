@@ -2,11 +2,57 @@
 
 import { signIn, signOut, useSession } from 'next-auth/react'
 import { User, LogOut } from 'lucide-react'
+import { useEffect } from 'react'
 
 export default function LoginButton() {
   const { data: session, status } = useSession()
 
+  // Add logging for session status changes
+  useEffect(() => {
+    console.log('=== LOGIN BUTTON SESSION STATUS CHANGE ===');
+    console.log('Session status:', status);
+    console.log('Session data:', session ? {
+      user: {
+        email: session.user?.email,
+        name: session.user?.name,
+        id: session.user?.id,
+        tier: session.user?.tier,
+        isEduEmail: session.user?.isEduEmail
+      },
+      expires: session.expires
+    } : null);
+  }, [session, status]);
+
+  const handleSignIn = async () => {
+    console.log('=== SIGN IN BUTTON CLICKED ===');
+    try {
+      console.log('Initiating Google sign-in...');
+      const result = await signIn('google', { 
+        callbackUrl: '/dashboard',
+        redirect: true 
+      });
+      console.log('Sign-in result:', result);
+    } catch (error) {
+      console.error('Sign-in error:', error);
+    }
+  };
+
+  const handleSignOut = async () => {
+    console.log('=== SIGN OUT BUTTON CLICKED ===');
+    try {
+      console.log('Initiating sign-out...');
+      const result = await signOut({ 
+        callbackUrl: '/',
+        redirect: true 
+      });
+      console.log('Sign-out result:', result);
+    } catch (error) {
+      console.error('Sign-out error:', error);
+    }
+  };
+
   if (status === 'loading') {
+    console.log('=== LOGIN BUTTON LOADING STATE ===');
     return (
       <div className="animate-pulse">
         <div className="h-10 w-24 bg-amber-100 rounded"></div>
@@ -15,6 +61,7 @@ export default function LoginButton() {
   }
 
   if (session) {
+    console.log('=== LOGIN BUTTON AUTHENTICATED STATE ===');
     return (
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
@@ -37,7 +84,7 @@ export default function LoginButton() {
           </div>
         </div>
         <button
-          onClick={() => signOut()}
+          onClick={handleSignOut}
           className="flex items-center gap-2 px-3 py-2 text-sm text-primary-200 hover:text-primary-300 transition-colors"
         >
           <LogOut className="w-4 h-4" />
@@ -47,9 +94,10 @@ export default function LoginButton() {
     )
   }
 
+  console.log('=== LOGIN BUTTON UNAUTHENTICATED STATE ===');
   return (
     <button
-      onClick={() => signIn('google')}
+      onClick={handleSignIn}
       className="flex items-center gap-2 px-4 py-2 bg-primary-300 text-white rounded-lg hover:bg-primary-400 transition-all duration-200 shadow-sm hover:shadow-md"
     >
       <svg className="w-5 h-5" viewBox="0 0 24 24">

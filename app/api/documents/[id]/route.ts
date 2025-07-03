@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions, serializeBigInt } from '@/app/lib/auth'
-import { db } from '@/app/lib/db'
+import { firestoreHelpers } from '@/app/lib/firestore-schema'
 import { z } from 'zod'
-import FileStorageManager from '@/app/utils/fileStorage'
+import { FirebaseStorageManager } from '@/app/utils/firebaseStorage'
+import { doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore'
+import { db } from '@/app/lib/firebase'
+import admin from 'firebase-admin'
 
 // Schema for updating document
 const updateDocumentSchema = z.object({
@@ -16,112 +19,156 @@ const updateDocumentSchema = z.object({
   thumbnailUrl: z.string().optional(),
   processingTimeMs: z.number().optional(),
   tokensUsed: z.number().optional(),
+  results: z.array(z.object({
+    page_number: z.number(),
+    translation: z.string(),
+    original_text: z.string(),
+    isChapterStart: z.boolean().optional(),
+    chapterInfo: z.object({
+      page_number: z.number(),
+      title: z.string(),
+      position: z.enum(['top', 'middle', 'bottom']),
+      confidence: z.number(),
+    }).optional(),
+  })).optional(),
+  chaptersDetected: z.number().optional(),
+  chaptersProcessedAt: z.date().optional(),
 })
 
-// PUT /api/documents/[id] - Update document
-export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const session = await getServerSession(authOptions)
-    
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const documentId = params.id
+    const docRef = doc(db, 'documents', documentId)
+    const docSnap = await getDoc(docRef)
 
-    if (!documentId) {
-      return NextResponse.json({ error: 'Document ID required' }, { status: 400 })
-    }
-
-    const body = await request.json()
-    const data = updateDocumentSchema.parse(body)
-
-    // Verify document belongs to user
-    const existingDocument = await db.document.findFirst({
-      where: { 
-        id: documentId,
-        userId: session.user.id 
-      }
-    })
-
-    if (!existingDocument) {
+    if (!docSnap.exists()) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 })
     }
 
+    const document = docSnap.data()
+    
+    // Check if user owns this document
+    if (document.userId !== session.user.id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
+    return NextResponse.json({ 
+      document: { 
+        id: docSnap.id, 
+        ...document,
+        createdAt: document.createdAt?.toDate?.()?.toISOString() || document.createdAt,
+        updatedAt: document.updatedAt?.toDate?.()?.toISOString() || document.updatedAt,
+      } 
+    })
+  } catch (error) {
+    console.error('Error fetching document:', error)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
+
+export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const documentId = params.id
+    const body = await request.json()
+    
+    // Validate request body
+    const validatedData = updateDocumentSchema.parse(body)
+
+    // Get the document to check ownership
+    const docRef = doc(db, 'documents', documentId)
+    const docSnap = await getDoc(docRef)
+
+    if (!docSnap.exists()) {
+      return NextResponse.json({ error: 'Document not found' }, { status: 404 })
+    }
+
+    const document = docSnap.data()
+    
+    // Check if user owns this document
+    if (document.userId !== session.user.id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
     // Update the document
-    const updatedDocument = await db.document.update({
-      where: { id: documentId },
-      data: {
-        ...data,
-        updatedAt: new Date(),
-        ...(data.status === 'completed' && { completedAt: new Date() })
-      }
+    await updateDoc(docRef, {
+      ...validatedData,
+      updatedAt: new Date(),
     })
 
-    return NextResponse.json({ document: serializeBigInt(updatedDocument) })
+    // Get updated document
+    const updatedDocSnap = await getDoc(docRef)
+    const updatedDocument = updatedDocSnap.data()
+
+    return NextResponse.json({ 
+      document: { 
+        id: updatedDocSnap.id, 
+        ...updatedDocument,
+        createdAt: updatedDocument?.createdAt?.toDate?.()?.toISOString() || updatedDocument?.createdAt,
+        updatedAt: updatedDocument?.updatedAt?.toDate?.()?.toISOString() || updatedDocument?.updatedAt,
+      } 
+    })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: 'Invalid request data', details: error.errors }, { status: 400 })
     }
-    
     console.error('Error updating document:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
-// DELETE /api/documents/[id] - Delete document
 export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const session = await getServerSession(authOptions)
-    
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const documentId = params.id
+    const docRef = doc(db, 'documents', documentId)
+    const docSnap = await getDoc(docRef)
 
-    if (!documentId) {
-      return NextResponse.json({ error: 'Document ID required' }, { status: 400 })
-    }
-
-    // Verify document belongs to user and get file size for storage cleanup
-    const existingDocument = await db.document.findFirst({
-      where: { 
-        id: documentId,
-        userId: session.user.id 
-      },
-      select: {
-        id: true,
-        originalFileSize: true,
-      }
-    })
-
-    if (!existingDocument) {
+    if (!docSnap.exists()) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 })
     }
 
-    // Delete files from Vercel Blob storage
-    try {
-      await FileStorageManager.deleteDocumentFiles(session.user.id, documentId)
-      console.log(`🗑️ Deleted blob files for document ${documentId}`)
-    } catch (storageError) {
-      console.error('Failed to delete files from blob storage:', storageError)
-      // Continue with database deletion even if blob deletion fails
+    const document = docSnap.data()
+    
+    // Check if user owns this document
+    if (document.userId !== session.user.id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    // Delete document from database
-    await db.document.delete({
-      where: { id: documentId }
-    })
-
-    // Update user document count and storage usage
-    await db.user.update({
-      where: { id: session.user.id },
-      data: {
-        documentsCount: { decrement: 1 },
-        storageUsedBytes: { decrement: existingDocument.originalFileSize }
+    // Delete associated files from Firebase Storage
+    if (admin.apps.length === 0) {
+      // Initialize admin if not already done
+      try {
+        admin.initializeApp()
+      } catch (error) {
+        // App might already be initialized
       }
-    })
+    }
+
+    try {
+      const bucket = admin.storage().bucket()
+      const userPrefix = `users/${session.user.id}/${documentId}/`
+      await bucket.deleteFiles({ prefix: userPrefix })
+    } catch (storageError) {
+      console.error('Error deleting storage files:', storageError)
+      // Continue with Firestore deletion even if storage deletion fails
+    }
+
+    // Delete the document from Firestore
+    await deleteDoc(docRef)
 
     return NextResponse.json({ success: true })
   } catch (error) {

@@ -21,38 +21,29 @@ export default function JobItem({ job, onDelete, getAllJobs, downloadFormat }: J
   const handleSideBySideView = async () => {
     setIsLoadingSideBySide(true)
     try {
-      console.log('🕐 Waiting for images before opening side-by-side view...')
+      console.log('📄 Opening side-by-side view...')
       
       // Get the latest job state if possible
       const getLatestJob = (): TranslationJob => {
         if (getAllJobs) {
           const latestJob = getAllJobs().find(j => j.id === job.id)
           if (latestJob) {
-            console.log(`📸 Using latest job state: ${latestJob.results?.filter(r => r.page_image && r.page_image.length > 0).length || 0}/${latestJob.results?.length || 0} pages have images`)
+            console.log(`📄 Using latest job state: ${latestJob.results?.length || 0} pages available`)
             return latestJob
           }
         }
-        console.log(`📸 Using prop job state: ${job.results?.filter(r => r.page_image && r.page_image.length > 0).length || 0}/${job.results?.length || 0} pages have images`)
+        console.log(`📄 Using prop job state: ${job.results?.length || 0} pages available`)
         return job
       }
       
       const currentJob = getLatestJob()
-      console.log(`📸 Current images status: ${currentJob.results?.filter(r => r.page_image && r.page_image.length > 0).length || 0}/${currentJob.results?.length || 0} pages have images`)
+      console.log(`📄 Opening side-by-side with ${currentJob.results?.length || 0} pages`)
       
-      // Give more time for images to load and check the latest state periodically
-      const jobWithImages = await downloads.waitForImages(currentJob, 8000, getLatestJob)
-      
-      // Get the absolute latest state before opening
-      const finalJob = getLatestJob()
-      const finalImageCount = finalJob.results?.filter(r => r.page_image && r.page_image.length > 0).length || 0
-      console.log(`📸 Final images before side-by-side: ${finalImageCount}/${finalJob.results?.length || 0} pages have images`)
-      
-      downloads.viewSideBySide(finalJob)
+      downloads.viewSideBySide(currentJob)
     } catch (error) {
-      console.error('Error waiting for images:', error)
-      console.log('🔄 Opening side-by-side anyway after timeout...')
+      console.error('Error opening side-by-side view:', error)
       const fallbackJob = getAllJobs ? getAllJobs().find(j => j.id === job.id) || job : job
-      downloads.viewSideBySide(fallbackJob) // Open anyway after timeout
+      downloads.viewSideBySide(fallbackJob)
     } finally {
       setIsLoadingSideBySide(false)
     }
@@ -119,7 +110,7 @@ export default function JobItem({ job, onDelete, getAllJobs, downloadFormat }: J
                   className="btn btn-primary flex items-center space-x-1 px-3 py-2 disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto justify-center"
                 >
                   <Eye className="h-4 w-4" />
-                  <span>{isLoadingSideBySide ? 'Loading...' : 'Side-by-Side'}</span>
+                  <span>{isLoadingSideBySide ? 'Loading...' : 'Original vs Translation'}</span>
                 </button>
                 <button
                   onClick={openTranslationOnly}

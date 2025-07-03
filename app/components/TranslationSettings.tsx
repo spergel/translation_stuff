@@ -35,7 +35,6 @@ export default function TranslationSettings({
 
   const tiers: { value: UserTier; label: string; description: string }[] = [
     { value: 'free', label: 'Free', description: '5 documents, 5GB storage' },
-    { value: 'basic', label: 'Basic', description: '50 documents, 5GB storage' },
     { value: 'pro', label: 'Pro', description: '500 documents, 25GB storage' },
     { value: 'enterprise', label: 'Enterprise', description: 'Unlimited documents, 50GB storage' }
   ]
